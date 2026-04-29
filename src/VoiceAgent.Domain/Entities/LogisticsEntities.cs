@@ -56,11 +56,13 @@ public class CourierQuote : AuditableEntity
     public decimal? WeightKg { get; set; }
     public string? PackageType { get; set; }
     public string? Urgency { get; set; }
+    public string? CustomerPhone { get; set; }
     public DateTime? EstimatedDeliveryTime { get; set; }
     public decimal BaseFee { get; set; }
     public decimal DistanceFee { get; set; }
     public decimal WeightFee { get; set; }
     public decimal UrgencyFee { get; set; }
+    public decimal ZoneFee { get; set; }
     public decimal Total { get; set; }
     public string Currency { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
@@ -76,11 +78,13 @@ public class CabBooking : AuditableEntity
     public string? PickupAddressJson { get; set; }
     public string? DropoffAddressJson { get; set; }
     public decimal? DistanceKm { get; set; }
+    public DateTime? RequestedPickupDateTime { get; set; }
     public int? PassengerCount { get; set; }
     public string? VehicleType { get; set; }
     public decimal? EstimatedFare { get; set; }
     public DateTime? BookingTime { get; set; }
     public string? CustomerPhone { get; set; }
+    public string? SpecialNotes { get; set; }
     public string Status { get; set; } = string.Empty;
     public string? FinalResultJson { get; set; }
 }
@@ -100,6 +104,7 @@ public class DoctorAppointment : AuditableEntity
     public DateTime? PreferredDateTime { get; set; }
     public DateTime? AppointmentDateTime { get; set; }
     public bool EmergencyDetected { get; set; }
+    public bool HighRiskTriggered { get; set; }
     public string Status { get; set; } = string.Empty;
     public string? FinalResultJson { get; set; }
 }

@@ -104,6 +104,7 @@ public class RestaurantOrder : AuditableEntity
     public string? FulfillmentType { get; set; }
     public string? AddressJson { get; set; }
     public string? ItemsJson { get; set; }
+    public string? DealsJson { get; set; }
     public decimal Subtotal { get; set; }
     public decimal DeliveryFee { get; set; }
     public decimal Discount { get; set; }
