@@ -1,0 +1,9 @@
+namespace VoiceAgent.Application.Services.Restaurant;
+
+public interface IRestaurantMenuService;
+public interface IRestaurantDealService;
+public interface IRestaurantDiscoveryService;
+public interface IRestaurantCartService;
+public interface IRestaurantPricingService;
+public interface IRestaurantOrderService;
+public interface IDeliveryCoverageService;

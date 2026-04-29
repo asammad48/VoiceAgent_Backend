@@ -1,0 +1,16 @@
+namespace VoiceAgent.Application.Repositories;
+
+public interface ITenantRepository;
+public interface IClientRepository;
+public interface IBranchRepository;
+public interface ICampaignRepository;
+public interface ICampaignConfigurationRepository;
+public interface ICallSessionRepository;
+public interface ICallTurnRepository;
+public interface ICallEventRepository;
+public interface IToolCallLogRepository;
+public interface IExternalApiConfigurationRepository;
+public interface IRestaurantMenuRepository;
+public interface ICourierPricingRepository;
+public interface IKnowledgeRepository;
+public interface ICostLogRepository;
