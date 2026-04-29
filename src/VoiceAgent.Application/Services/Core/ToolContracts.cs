@@ -35,6 +35,118 @@ public sealed class ToolExecutionResult
     public bool RequiresHumanHandoff { get; set; }
 }
 
+
+public static class RestaurantIntentCatalog
+{
+    public static readonly IReadOnlyCollection<string> SupportedIntents =
+    [
+        "AskMenuCategories",
+        "AskDeals",
+        "AskDishInfo",
+        "SearchMenuItem",
+        "AddItemToCart",
+        "RemoveItemFromCart",
+        "ChangeQuantity",
+        "AskCurrentTotal",
+        "SetDeliveryOrPickup",
+        "ProvideAddress",
+        "ProvidePhone",
+        "ConfirmOrder",
+        "CancelOrder",
+        "AskBusinessHours",
+        "AskDeliveryArea"
+    ];
+}
+
+
+public static class CourierIntentCatalog
+{
+    public static readonly IReadOnlyCollection<string> SupportedIntents =
+    [
+        "AskCourierPrice",
+        "CreateCourierQuote",
+        "CreateCourierOrder",
+        "ProvidePickupAddress",
+        "ProvideDropoffAddress",
+        "ProvideWeight",
+        "ProvidePackageType",
+        "ProvideUrgency",
+        "AskDeliveryTime",
+        "ConfirmCourierOrder",
+        "CancelCourierOrder"
+    ];
+
+    public static readonly IReadOnlyCollection<string> RequiredSlots =
+    [
+        "PickupAddress",
+        "DropoffAddress",
+        "PackageWeight",
+        "PackageType",
+        "Urgency",
+        "CustomerPhone"
+    ];
+}
+
+
+public static class CabIntentCatalog
+{
+    public static readonly IReadOnlyCollection<string> SupportedIntents =
+    [
+        "CreateCabBooking",
+        "ProvidePickupLocation",
+        "ProvideDropoffLocation",
+        "ProvideDateTime",
+        "ProvidePassengerCount",
+        "ProvideVehicleType",
+        "ProvideCustomerPhone",
+        "ProvideSpecialNotes",
+        "AskFareEstimate",
+        "ConfirmCabBooking",
+        "CancelCabBooking"
+    ];
+
+    public static readonly IReadOnlyCollection<string> RequiredSlots =
+    [
+        "PickupLocation",
+        "DropoffLocation",
+        "DateTime",
+        "PassengerCount",
+        "VehicleType",
+        "CustomerPhone",
+        "SpecialNotes"
+    ];
+}
+
+
+public static class DoctorIntentCatalog
+{
+    public static readonly IReadOnlyCollection<string> SupportedIntents =
+    [
+        "CreateAppointment",
+        "ProvidePatientName",
+        "ProvidePhone",
+        "ProvidePatientType",
+        "ProvideReasonForVisit",
+        "ProvidePreferredDoctor",
+        "ProvidePreferredDateTime",
+        "ProvideClinicBranch",
+        "ConfirmAppointment",
+        "CancelAppointment",
+        "EmergencyHelp"
+    ];
+
+    public static readonly IReadOnlyCollection<string> RequiredSlots =
+    [
+        "PatientName",
+        "Phone",
+        "PatientType",
+        "ReasonForVisit",
+        "PreferredDoctor",
+        "PreferredDateTime",
+        "ClinicBranch"
+    ];
+}
+
 public static class CampaignToolCatalog
 {
     public static readonly IReadOnlyCollection<string> RestaurantTools =

@@ -9,9 +9,10 @@ public static class KnowledgeChunkConfiguration
         "ClientId",
         "CampaignId",
         "KnowledgeBaseId",
-        "CreatedOn",
-        "IsActive"
+        "IsActive",
+        "CreatedOn"
     ];
 
-    public const string VectorIndexNote = "Create vector index on EmbeddingVector (pgvector) during migration.";
+    public const string VectorIndexNote =
+        "Use PostgreSQL + pgvector. Create a vector index on EmbeddingVector with provider dimension (e.g., 1536).";
 }
