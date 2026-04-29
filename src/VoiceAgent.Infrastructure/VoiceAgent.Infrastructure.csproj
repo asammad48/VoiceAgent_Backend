@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\VoiceAgent.Application\VoiceAgent.Application.csproj" />
+    <ProjectReference Include="..\VoiceAgent.Domain\VoiceAgent.Domain.csproj" />
+    <ProjectReference Include="..\VoiceAgent.Common\VoiceAgent.Common.csproj" />
+  </ItemGroup>
+</Project>

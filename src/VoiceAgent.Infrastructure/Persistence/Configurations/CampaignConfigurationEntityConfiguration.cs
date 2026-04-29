@@ -11,12 +11,24 @@ public static class CampaignConfigurationEntityConfiguration
         "ValidationRulesJson",
         "FallbackRulesJson",
         "ConfirmationRulesJson",
-        "HumanTransferJson",
-        "LlmSettingsJson",
-        "VoiceSettingsJson",
-        "RagSettingsJson",
-        "RecordingSettingsJson",
-        "BillingSettingsJson"
+        "HumanTransferSettingsJson",
+        "LlmJson",
+        "VoiceJson",
+        "RagJson",
+        "RecordingJson",
+        "BillingJson",
+        "FailureHandlingJson",
+        "HumanTransferConfigurationJson"
     ];
-    public static readonly string[] Indexes = ["TenantId", "ClientId", "CampaignId", "CreatedOn", "IsActive", "IsDeleted"];
+
+    public static readonly string[] Indexes =
+    [
+        "TenantId",
+        "ClientId",
+        "CampaignId",
+        "HumanTransferMode",
+        "CreatedOn",
+        "IsActive",
+        "IsDeleted"
+    ];
 }
