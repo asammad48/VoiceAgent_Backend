@@ -40,15 +40,28 @@ public class Branch : AuditableEntity
     public decimal? MinimumOrderAmount { get; set; }
 }
 
+public class CampaignTemplate : AuditableEntity
+{
+    public Guid TenantId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public CampaignType CampaignType { get; set; }
+    public CampaignDirection Direction { get; set; }
+    public string? Description { get; set; }
+    public string? BaseFlowJson { get; set; }
+}
+
 public class Campaign : AuditableEntity
 {
     public Guid TenantId { get; set; }
     public Guid ClientId { get; set; }
     public Guid? BranchId { get; set; }
+    public Guid? CampaignTemplateId { get; set; }
     public string Name { get; set; } = string.Empty;
+    public string AgentName { get; set; } = string.Empty;
     public CampaignType CampaignType { get; set; }
     public CampaignDirection Direction { get; set; }
     public bool IsDemoEnabled { get; set; }
+    public bool IsActive { get; set; }
 }
 
 public class CampaignConfiguration : AuditableEntity
@@ -62,10 +75,14 @@ public class CampaignConfiguration : AuditableEntity
     public string? ValidationRulesJson { get; set; }
     public string? FallbackRulesJson { get; set; }
     public string? ConfirmationRulesJson { get; set; }
-    public string? HumanTransferJson { get; set; }
-    public string? LlmSettingsJson { get; set; }
-    public string? VoiceSettingsJson { get; set; }
-    public string? RagSettingsJson { get; set; }
-    public string? RecordingSettingsJson { get; set; }
-    public string? BillingSettingsJson { get; set; }
+    public string? HumanTransferSettingsJson { get; set; }
+    public HumanTransferMode? HumanTransferMode { get; set; }
+    public string? LlmJson { get; set; }
+    public string? VoiceJson { get; set; }
+    public string? RagJson { get; set; }
+    public string? RecordingJson { get; set; }
+    public string? BillingJson { get; set; }
+    public string? FailureHandlingJson { get; set; }
+    public string? HumanTransferConfigurationJson { get; set; }
 }
+
