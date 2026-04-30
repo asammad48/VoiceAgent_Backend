@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using VoiceAgent.Application.Interfaces;
+using VoiceAgent.Application.Interfaces.Tools;
+using VoiceAgent.Application.Services.Tools;
 using VoiceAgent.Application.Services;
 
 namespace VoiceAgent.Application;
@@ -23,6 +25,7 @@ public static class DependencyInjection
         services.AddScoped<IKnowledgeBaseService, KnowledgeBaseService>();
         services.AddScoped<IExternalApiConfigurationService, ExternalApiConfigurationService>();
         services.AddScoped<IProviderCostService, ProviderCostService>();
+        services.AddScoped<IToolExecutionService, ToolExecutionService>();
         return services;
     }
 }
