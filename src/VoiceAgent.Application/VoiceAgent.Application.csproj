@@ -5,6 +5,12 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="AutoMapper" Version="12.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.5" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\VoiceAgent.Domain\VoiceAgent.Domain.csproj" />
     <ProjectReference Include="..\VoiceAgent.Common\VoiceAgent.Common.csproj" />
   </ItemGroup>

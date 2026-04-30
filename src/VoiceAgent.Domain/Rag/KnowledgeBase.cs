@@ -1,0 +1,1 @@
+namespace VoiceAgent.Domain.Entities; public class KnowledgeBase { public Guid Id{get;set;} public Guid TenantId{get;set;} public Guid ClientId{get;set;} public Guid CampaignId{get;set;} public string Name{get;set;}=string.Empty; public string Description{get;set;}=string.Empty; public bool IsActive{get;set;}=true; public DateTime CreatedOn{get;set;}=DateTime.UtcNow; }

@@ -1,0 +1,1 @@
+namespace VoiceAgent.Domain.Entities; public class CourierWeightBand { public Guid Id{get;set;} public Guid TenantId{get;set;} public Guid ClientId{get;set;} public Guid CourierPricingProfileId{get;set;} public decimal FromKg{get;set;} public decimal ToKg{get;set;} public decimal Fee{get;set;} }

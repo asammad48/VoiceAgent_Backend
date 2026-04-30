@@ -1,0 +1,1 @@
+namespace VoiceAgent.Domain.Entities; public class CourierZone { public Guid Id{get;set;} public Guid TenantId{get;set;} public Guid ClientId{get;set;} public Guid CourierPricingProfileId{get;set;} public string Name{get;set;}=string.Empty; public string ZoneJson{get;set;}=string.Empty; public decimal ExtraFee{get;set;} public bool IsActive{get;set;}=true; }

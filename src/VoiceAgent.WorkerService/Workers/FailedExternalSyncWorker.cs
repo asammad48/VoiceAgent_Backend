@@ -1,16 +1,18 @@
-using VoiceAgent.Application.Services.Core;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace VoiceAgent.WorkerService.Workers;
 
-public class FailedExternalSyncWorker(
-    IExternalDispatchOrchestrator externalDispatchOrchestrator)
+public class FailedExternalSyncWorker(ILogger<FailedExternalSyncWorker> logger) : BackgroundService
 {
-    public IExternalDispatchOrchestrator ExternalDispatchOrchestrator { get; } = externalDispatchOrchestrator;
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        logger.LogInformation("FailedExternalSyncWorker started");
 
-    // Responsibilities:
-    // 1) Find records with status CapturedPendingSync
-    // 2) Load external API configuration
-    // 3) Retry dispatch through IExternalDispatchOrchestrator
-    // 4) Save request/response
-    // 5) Update status
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogInformation("FailedExternalSyncWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
+            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+        }
+    }
 }

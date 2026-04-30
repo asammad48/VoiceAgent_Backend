@@ -1,9 +1,18 @@
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
 namespace VoiceAgent.WorkerService.Workers;
 
-public class RecordingProcessingWorker
+public class RecordingProcessingWorker(ILogger<RecordingProcessingWorker> logger) : BackgroundService
 {
-    // Responsibilities:
-    // 1) Upload recordings to Cloudflare R2
-    // 2) Save CallRecording rows
-    // 3) Clean temp files
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        logger.LogInformation("RecordingProcessingWorker started");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogInformation("RecordingProcessingWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
+            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+        }
+    }
 }

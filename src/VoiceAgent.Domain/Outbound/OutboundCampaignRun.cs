@@ -1,0 +1,1 @@
+namespace VoiceAgent.Domain.Entities; public class OutboundCampaignRun { public Guid Id{get;set;} public Guid TenantId{get;set;} public Guid ClientId{get;set;} public Guid CampaignId{get;set;} public string Name{get;set;}=string.Empty; public string Status{get;set;}=string.Empty; public DateTime StartedAt{get;set;}=DateTime.UtcNow; public DateTime? EndedAt{get;set;} }
