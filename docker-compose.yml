@@ -1,34 +1,37 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     environment:
-      POSTGRES_DB: voiceagent
-      POSTGRES_USER: voiceagent
-      POSTGRES_PASSWORD: voiceagent_dev
+      POSTGRES_DB: voice_agent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  api:
+  voiceagent-api:
     build:
       context: .
-      dockerfile: src/VoiceAgent.WebAPI/Dockerfile
+      dockerfile: src/VoiceAgent.Api/Dockerfile
     ports:
       - "8080:8080"
     depends_on:
       - postgres
     environment:
-      ConnectionStrings__DefaultConnection: Host=postgres;Database=voiceagent;Username=voiceagent;Password=voiceagent_dev
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=voice_agent;Username=postgres;Password=postgres
 
-  worker:
+  voiceagent-worker:
     build:
       context: .
       dockerfile: src/VoiceAgent.WorkerService/Dockerfile
     depends_on:
       - postgres
     environment:
-      ConnectionStrings__DefaultConnection: Host=postgres;Database=voiceagent;Username=voiceagent;Password=voiceagent_dev
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=voice_agent;Username=postgres;Password=postgres
 
 volumes:
   postgres_data:

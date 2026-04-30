@@ -1,15 +1,18 @@
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
 namespace VoiceAgent.WorkerService.Workers;
 
-public class KnowledgeIndexingWorker
+public class KnowledgeIndexingWorker(ILogger<KnowledgeIndexingWorker> logger) : BackgroundService
 {
-    // Production indexing flow:
-    // Upload document/text
-    //  -> Create KnowledgeDocument
-    //  -> Chunk content (500-800 tokens, overlap 80-120)
-    //  -> Generate embeddings
-    //  -> Save KnowledgeChunks
-    //  -> Mark document indexed
-    //
-    // Scope filters required in all retrieval/indexing operations:
-    // TenantId, ClientId, CampaignId, KnowledgeBaseId, IsActive.
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        logger.LogInformation("KnowledgeIndexingWorker started");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogInformation("KnowledgeIndexingWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
+            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+        }
+    }
 }

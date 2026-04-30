@@ -1,2 +1,10 @@
+using VoiceAgent.Application.Tools;
+
 namespace VoiceAgent.Application.Interfaces.Tools;
-public interface IAgentTool { string Name { get; } Task<string> ExecuteAsync(string input, CancellationToken ct=default); }
+
+public interface IAgentTool
+{
+    string Name { get; }
+    IReadOnlyCollection<string> RequiredSlots { get; }
+    Task<ToolExecutionResult> ExecuteAsync(ToolExecutionContext context, CancellationToken ct = default);
+}
