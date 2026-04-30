@@ -1,10 +1,18 @@
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
 namespace VoiceAgent.WorkerService.Workers;
 
-public class CostAggregationWorker
+public class CostAggregationWorker(ILogger<CostAggregationWorker> logger) : BackgroundService
 {
-    // Responsibilities:
-    // 1) Aggregate provider usage per tenant/client/campaign/month
-    // 2) Track total calls, minutes, provider cost, monthly caps, call caps
-    // 3) Set WarningExceeded if cap crossed
-    // 4) Do not auto-block unless SuperAdmin blocks manually
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        logger.LogInformation("CostAggregationWorker started");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogInformation("CostAggregationWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
+            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+        }
+    }
 }
