@@ -1,14 +1,18 @@
-using VoiceAgent.Application.Services.Sales;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace VoiceAgent.WorkerService.Workers;
 
-public class OutboundDialerWorker(
-    IOutboundDialerOrchestrator dialerOrchestrator)
+public class OutboundDialerWorker(ILogger<OutboundDialerWorker> logger) : BackgroundService
 {
-    public async Task<OutboundDialCycleResult> ExecuteDialCycleAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Outbound calls are intentionally handled in WorkerService
-        // and not in a live WebAPI request path.
-        return await dialerOrchestrator.RunCycleAsync(cancellationToken);
+        logger.LogInformation("OutboundDialerWorker started");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogInformation("OutboundDialerWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
+            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+        }
     }
 }

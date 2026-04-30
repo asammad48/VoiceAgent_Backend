@@ -1,10 +1,18 @@
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
 namespace VoiceAgent.WorkerService.Workers;
 
-public class CallSummaryWorker
+public class CallSummaryWorker(ILogger<CallSummaryWorker> logger) : BackgroundService
 {
-    // Responsibilities:
-    // 1) Summarize completed calls
-    // 2) Save SummaryJson
-    // 3) Use LLM only if needed
-    // 4) Track token usage
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        logger.LogInformation("CallSummaryWorker started");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogInformation("CallSummaryWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
+            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+        }
+    }
 }
