@@ -6,5 +6,7 @@ public static class SerilogLogFiles
     public const string Worker = "logs/worker-.log";
     public const string FreeSwitch = "logs/freeswitch-.log";
     public const string ProviderErrors = "logs/provider-errors-.log";
-    public const string BusinessLogsRule = "Business logs go to PostgreSQL.";
+    public const string SystemErrors = "logs/system-errors-.log";
+    public const string Debug = "logs/debug-.log";
+    public const string BusinessLogsRule = "Business logs go to PostgreSQL tables: CallSession, CallTurn, CallEvent, ToolCallLog, ExternalSystemLog, CallCostLog, AuditLog.";
 }
