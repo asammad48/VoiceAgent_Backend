@@ -1,12 +1,14 @@
+using VoiceAgent.Application.Services.Sales;
+
 namespace VoiceAgent.WorkerService.Workers;
 
-public class OutboundDialerWorker
+public class OutboundDialerWorker(
+    IOutboundDialerOrchestrator dialerOrchestrator)
 {
-    // Responsibilities:
-    // 1) Load active outbound campaigns
-    // 2) Check tenant/campaign call caps and warning state
-    // 3) Load eligible leads
-    // 4) Create OutboundAttempt
-    // 5) Initiate call through ITelephonyProvider
-    // 6) Update attempt status
+    public async Task<OutboundDialCycleResult> ExecuteDialCycleAsync(CancellationToken cancellationToken)
+    {
+        // Outbound calls are intentionally handled in WorkerService
+        // and not in a live WebAPI request path.
+        return await dialerOrchestrator.RunCycleAsync(cancellationToken);
+    }
 }

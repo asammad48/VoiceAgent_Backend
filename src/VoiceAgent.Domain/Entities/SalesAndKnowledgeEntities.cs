@@ -86,11 +86,14 @@ public class CallCostLog : AuditableEntity
     public decimal SttAudioSeconds { get; set; }
     public int CallDurationSeconds { get; set; }
     public decimal EstimatedCost { get; set; }
+    public string? CorrelationId { get; set; }
 }
 
 public class TenantUsageMonthly : AuditableEntity
 {
     public Guid TenantId { get; set; }
+    public Guid ClientId { get; set; }
+    public Guid CampaignId { get; set; }
     public int Year { get; set; }
     public int Month { get; set; }
     public int TotalCalls { get; set; }

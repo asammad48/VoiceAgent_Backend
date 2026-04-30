@@ -86,3 +86,16 @@ public class CampaignConfiguration : AuditableEntity
     public string? HumanTransferConfigurationJson { get; set; }
 }
 
+
+public class AuditLog : AuditableEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid ClientId { get; set; }
+    public Guid CampaignId { get; set; }
+    public Guid? CallSessionId { get; set; }
+    public string? CorrelationId { get; set; }
+    public string Action { get; set; } = string.Empty;
+    public string EntityName { get; set; } = string.Empty;
+    public string? EntityId { get; set; }
+    public string? MetadataJson { get; set; }
+}

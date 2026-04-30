@@ -22,6 +22,7 @@ public class ToolCallLog : AuditableEntity
     public string Status { get; set; } = string.Empty;
     public string? ErrorMessage { get; set; }
     public int? DurationMs { get; set; }
+    public string? CorrelationId { get; set; }
 }
 
 public class ExternalApiConfiguration : AuditableEntity
@@ -37,4 +38,20 @@ public class ExternalApiConfiguration : AuditableEntity
     public string? SecretReferenceJson { get; set; }
     public string? RetryPolicyJson { get; set; }
     public bool IsEnabled { get; set; }
+}
+
+
+public class ExternalSystemLog : AuditableEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid ClientId { get; set; }
+    public Guid CampaignId { get; set; }
+    public Guid CallSessionId { get; set; }
+    public string EndpointKey { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string? ExternalReference { get; set; }
+    public string? RequestJson { get; set; }
+    public string? ResponseJson { get; set; }
+    public string? ErrorMessage { get; set; }
+    public string? CorrelationId { get; set; }
 }
