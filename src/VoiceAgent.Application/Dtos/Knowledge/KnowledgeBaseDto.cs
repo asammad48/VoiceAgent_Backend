@@ -1,0 +1,7 @@
+namespace VoiceAgent.Application.Dtos.Knowledge;
+public class CreateKnowledgeBaseRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid CampaignId { get; set; } public string Name { get; set; } = string.Empty; public string Description { get; set; } = string.Empty; }
+public class KnowledgeBaseResponseDto { public Guid Id { get; set; } public string Name { get; set; } = string.Empty; public string Description { get; set; } = string.Empty; public bool IsActive { get; set; } }
+public class CreateKnowledgeDocumentRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid CampaignId { get; set; } public Guid KnowledgeBaseId { get; set; } public string Title { get; set; } = string.Empty; public string DocumentType { get; set; } = string.Empty; public string Content { get; set; } = string.Empty; }
+public class KnowledgeDocumentResponseDto { public Guid Id { get; set; } public Guid KnowledgeBaseId { get; set; } public string Title { get; set; } = string.Empty; public string DocumentType { get; set; } = string.Empty; public bool IsActive { get; set; } }
+public class SearchKnowledgeRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid CampaignId { get; set; } public string Query { get; set; } = string.Empty; public int TopK { get; set; } = 5; }
+public class SearchKnowledgeResponseDto { public string ChunkText { get; set; } = string.Empty; public decimal Score { get; set; } public string MetadataJson { get; set; } = string.Empty; }

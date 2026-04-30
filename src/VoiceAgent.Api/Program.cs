@@ -3,6 +3,7 @@ using VoiceAgent.Api;
 using VoiceAgent.Application;
 using VoiceAgent.Common;
 using VoiceAgent.Infrastructure;
+using VoiceAgent.Infrastructure.Persistence.Seed;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,6 +18,11 @@ builder.Services
     .AddApiPresentation();
 
 var app = builder.Build();
+using (var scope = app.Services.CreateScope())
+{
+    var seeder = scope.ServiceProvider.GetRequiredService<DbSeeder>();
+    await seeder.SeedAsync();
+}
 
 if (app.Environment.IsDevelopment())
 {

@@ -1,0 +1,7 @@
+namespace VoiceAgent.Application.Dtos.Menus;
+public class CreateMenuRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid? BranchId { get; set; } public string Name { get; set; } = string.Empty; }
+public class MenuResponseDto { public Guid Id { get; set; } public string Name { get; set; } = string.Empty; public bool IsActive { get; set; } }
+public class CreateMenuCategoryRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid MenuId { get; set; } public string Name { get; set; } = string.Empty; public int SortOrder { get; set; } }
+public class MenuCategoryResponseDto { public Guid Id { get; set; } public Guid MenuId { get; set; } public string Name { get; set; } = string.Empty; public int SortOrder { get; set; } }
+public class CreateMenuItemRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid MenuId { get; set; } public Guid CategoryId { get; set; } public string Name { get; set; } = string.Empty; public decimal BasePrice { get; set; } public string Currency { get; set; } = string.Empty; }
+public class MenuItemResponseDto { public Guid Id { get; set; } public Guid MenuId { get; set; } public Guid CategoryId { get; set; } public string Name { get; set; } = string.Empty; public decimal BasePrice { get; set; } public string Currency { get; set; } = string.Empty; }

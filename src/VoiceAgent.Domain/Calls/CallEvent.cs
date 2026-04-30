@@ -1,0 +1,1 @@
+namespace VoiceAgent.Domain.Entities; public class CallEvent { public Guid Id {get;set;} public Guid CallSessionId {get;set;} public string EventType {get;set;}=string.Empty; public string? EventDataJson {get;set;} public DateTime CreatedOn {get;set;}=DateTime.UtcNow; }

@@ -1,0 +1,3 @@
+namespace VoiceAgent.Application.Dtos.Campaigns;
+public class CreateCampaignRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid? BranchId { get; set; } public string Name { get; set; } = string.Empty; public string CampaignType { get; set; } = string.Empty; public string Direction { get; set; } = string.Empty; }
+public class CampaignResponseDto { public Guid Id { get; set; } public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid? BranchId { get; set; } public string Name { get; set; } = string.Empty; public string CampaignType { get; set; } = string.Empty; public string Direction { get; set; } = string.Empty; public bool IsActive { get; set; } }

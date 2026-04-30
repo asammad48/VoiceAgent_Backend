@@ -1,0 +1,1 @@
+namespace VoiceAgent.Domain.Entities; public class RestaurantDealItem { public Guid Id{get;set;} public Guid TenantId{get;set;} public Guid ClientId{get;set;} public Guid DealId{get;set;} public Guid MenuItemId{get;set;} public Guid? MenuItemVariantId{get;set;} public int Quantity{get;set;} public bool IsRequired{get;set;} }

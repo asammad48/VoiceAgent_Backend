@@ -1,0 +1,1 @@
+namespace VoiceAgent.Domain.Entities; public class MenuItemAddon { public Guid Id{get;set;} public Guid TenantId{get;set;} public Guid ClientId{get;set;} public Guid? MenuItemId{get;set;} public string Name{get;set;}=string.Empty; public decimal Price{get;set;} public bool IsAvailable{get;set;} }
