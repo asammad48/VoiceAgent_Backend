@@ -1,8 +1,5 @@
 namespace VoiceAgent.Application.Services.Rag;
 
-public interface IKnowledgeBaseService;
-public interface IKnowledgeDocumentService;
-
 public interface IKnowledgeChunkingService
 {
     IReadOnlyCollection<string> Chunk(string rawContent, int targetChunkTokens = 650, int overlapTokens = 100);
