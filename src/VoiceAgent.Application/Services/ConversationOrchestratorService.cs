@@ -857,6 +857,50 @@ public class ConversationOrchestratorService(IAppDbContext db, IGeocodingProvide
     private sealed class AcaSlots { public string? CurrentInsuranceStatus { get; set; } public int? HouseholdSize { get; set; } public string? CoverageInterest { get; set; } public string? CallbackTime { get; set; } public bool OptedOut { get; set; } }
     private sealed class FeSlots { public string? BusinessType { get; set; } public string? MonthlyRevenueRange { get; set; } public string? FundingPurpose { get; set; } public string? CallbackTime { get; set; } public string? InterestLevel { get; set; } public bool OptedOut { get; set; } }
 
+
+    private async Task<string?> TryGetRagScopedReplyAsync(CallSession session, CampaignConfiguration? campaignConfig, string message, string lower, CancellationToken ct)
+    {
+        if (campaignConfig is null || string.IsNullOrWhiteSpace(campaignConfig.RagSettingsJson)) return null;
+        RagRuntimeConfiguration? runtime;
+        try
+        {
+            runtime = JsonSerializer.Deserialize<RagRuntimeConfiguration>(campaignConfig.RagSettingsJson);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (runtime is null || !runtime.Enabled || runtime.KnowledgeBaseId == Guid.Empty) return null;
+
+        var result = await ragRetrievalService.SearchAsync(
+            new RagSearchRequest(new RagScope(session.TenantId, session.ClientId, session.CampaignId, runtime.KnowledgeBaseId), message, runtime.TopK, runtime.MinScore, runtime.AllowedDocumentTypes),
+            ct);
+
+        if (!result.Found || result.Chunks.Count == 0) return null;
+        var best = result.Chunks.OrderByDescending(x => x.Score).First();
+        return best.ChunkText;
+    }
+
+    private Task AddToolLogAsync(CallSession session, string toolName, string status, object request, object? response, CancellationToken ct)
+    {
+        db.ToolCallLogs.Add(new ToolCallLog
+        {
+            Id = Guid.NewGuid(),
+            TenantId = session.TenantId,
+            ClientId = session.ClientId,
+            CampaignId = session.CampaignId,
+            CallSessionId = session.Id,
+            ToolName = toolName,
+            Status = status,
+            RequestJson = JsonSerializer.Serialize(request),
+            ResponseJson = JsonSerializer.Serialize(response),
+            ErrorMessage = string.Empty,
+            DurationMs = 0
+        });
+        return Task.CompletedTask;
+    }
+
     private async Task<decimal?> ResolveDistanceKmAsync(CourierSlots slots, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(slots.Pickup) || string.IsNullOrWhiteSpace(slots.Dropoff)) return null;

@@ -25,6 +25,7 @@ public interface IAppDbContext
     DbSet<CourierPricingProfile> CourierPricingProfiles { get; }
     DbSet<KnowledgeBase> KnowledgeBases { get; }
     DbSet<KnowledgeDocument> KnowledgeDocuments { get; }
+    DbSet<KnowledgeChunk> KnowledgeChunks { get; }
     DbSet<ExternalApiConfiguration> ExternalApiConfigurations { get; }
     DbSet<ToolCallLog> ToolCallLogs { get; }
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);

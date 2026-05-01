@@ -16,7 +16,6 @@ public sealed class DbRagRetrievalService(IAppDbContext db) : IRagRetrievalServi
                      && x.CampaignId == request.Scope.CampaignId
                      && x.KnowledgeBaseId == request.Scope.KnowledgeBaseId
                      && x.IsActive == request.Scope.IsActive)
-            .OrderBy(x => x.ChunkIndex)
             .Take(200)
             .ToListAsync(cancellationToken);
 
@@ -24,16 +23,15 @@ public sealed class DbRagRetrievalService(IAppDbContext db) : IRagRetrievalServi
         var ranked = chunks
             .Select(c =>
             {
-                var text = c.TextContent?.ToLowerInvariant() ?? string.Empty;
+                var text = c.ChunkText.ToLowerInvariant();
                 var hits = terms.Count(t => text.Contains(t));
                 var score = terms.Length == 0 ? 0m : (decimal)hits / terms.Length;
                 return new { c, score };
             })
             .Where(x => x.score >= request.MinScore)
             .OrderByDescending(x => x.score)
-            .ThenBy(x => x.c.ChunkIndex)
             .Take(request.TopK)
-            .Select(x => new RagChunkMatch(x.c.Id, x.c.KnowledgeDocumentId, x.c.ChunkIndex, x.score, x.c.TextContent, x.c.DocumentType, x.c.MetadataJson))
+            .Select((x, index) => new RagChunkMatch(x.c.Id, x.c.KnowledgeDocumentId, index, x.score, x.c.ChunkText, null, x.c.MetadataJson))
             .ToList();
 
         return new RagSearchResult(ranked.Count > 0, ranked, ranked.Count > 0 ? null : "NoScopedMatch");
