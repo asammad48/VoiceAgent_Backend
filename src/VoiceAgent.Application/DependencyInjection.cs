@@ -3,6 +3,8 @@ using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Application.Interfaces.Tools;
 using VoiceAgent.Application.Services.Tools;
 using VoiceAgent.Application.Services;
+using VoiceAgent.Application.Interfaces.Voice;
+using VoiceAgent.Application.Services.Voice;
 
 namespace VoiceAgent.Application;
 
@@ -26,6 +28,13 @@ public static class DependencyInjection
         services.AddScoped<IExternalApiConfigurationService, ExternalApiConfigurationService>();
         services.AddScoped<IProviderCostService, ProviderCostService>();
         services.AddScoped<IToolExecutionService, ToolExecutionService>();
+        services.AddScoped<IVoiceSessionService, VoiceSessionService>();
+        services.AddScoped<IVoiceStreamOrchestrator, VoiceStreamOrchestrator>();
+        services.AddScoped<IAudioStreamRouter, AudioStreamRouter>();
+        services.AddScoped<ISpeechEndDetectionService, SpeechEndDetectionService>();
+        services.AddScoped<IBargeInService, BargeInService>();
+        services.AddScoped<ICallRecordingService, CallRecordingService>();
+        services.AddScoped<ICallCostTrackingService, CallCostTrackingService>();
         return services;
     }
 }

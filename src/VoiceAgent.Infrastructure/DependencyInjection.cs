@@ -57,6 +57,11 @@ public static class DependencyInjection
         services.AddHttpClient<CloudflareR2StorageClient>();
         services.AddHttpClient<TelnyxTelephonyProvider>();
         services.AddSingleton<FreeSwitchTelephonyProvider>();
+        services.AddScoped<IStreamingSpeechToTextProvider, DeepgramStreamingSpeechToTextProvider>();
+        services.AddScoped<IStreamingTextToSpeechProvider, ElevenLabsStreamingTextToSpeechProvider>();
+        services.AddScoped<FreeSwitchAudioBridge>();
+        services.AddScoped<TelnyxWebhookHandler>();
+        services.AddScoped<CloudflareR2RecordingStorage>();
 
         services.AddScoped<ILlmProvider, LlmProviderBridge>();
         services.AddScoped<ISpeechToTextProvider, SpeechToTextProviderBridge>();
