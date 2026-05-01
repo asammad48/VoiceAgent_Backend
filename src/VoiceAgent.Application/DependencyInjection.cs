@@ -5,7 +5,6 @@ using VoiceAgent.Application.Services.Tools;
 using VoiceAgent.Application.Services;
 using VoiceAgent.Application.Interfaces.Voice;
 using VoiceAgent.Application.Services.Voice;
-using VoiceAgent.Application.Services.Rag;
 
 namespace VoiceAgent.Application;
 
@@ -28,7 +27,7 @@ public static class DependencyInjection
         services.AddScoped<IKnowledgeBaseService, KnowledgeBaseService>();
         services.AddScoped<IExternalApiConfigurationService, ExternalApiConfigurationService>();
         services.AddScoped<IProviderCostService, ProviderCostService>();
-        services.AddScoped<IRagRetrievalService, DbRagRetrievalService>();
+        services.AddScoped<VoiceAgent.Application.Services.Rag.IRagRetrievalService, VoiceAgent.Application.Services.Rag.DbRagRetrievalService>();
         services.AddScoped<IToolExecutionService, ToolExecutionService>();
         services.AddScoped<IVoiceSessionService, VoiceSessionService>();
         services.AddScoped<IVoiceStreamOrchestrator, VoiceStreamOrchestrator>();
