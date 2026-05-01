@@ -1,2 +1,12 @@
+using VoiceAgent.Application.Dtos.Campaigns;
+using VoiceAgent.Application.Dtos.Demo;
+
 namespace VoiceAgent.Application.Interfaces;
-public interface IDemoConversationService { Task<object> StartAsync(object request, CancellationToken ct=default); Task<object> SendAsync(object request, CancellationToken ct=default); }
+
+public interface IDemoConversationService
+{
+    Task<IReadOnlyList<CampaignResponseDto>> GetDemoCampaignsAsync(CancellationToken ct = default);
+    Task<StartDemoConversationResponseDto> StartAsync(StartDemoConversationRequestDto request, CancellationToken ct = default);
+    Task<SendDemoMessageResponseDto> SendAsync(SendDemoMessageRequestDto request, CancellationToken ct = default);
+    Task<bool> EndAsync(Guid callSessionId, CancellationToken ct = default);
+}
