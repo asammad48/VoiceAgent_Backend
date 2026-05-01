@@ -13,6 +13,7 @@ public interface IAppDbContext
     DbSet<CallSession> CallSessions { get; }
     DbSet<CallTurn> CallTurns { get; }
     DbSet<CallEvent> CallEvents { get; }
+    DbSet<CallCostLog> CallCostLogs { get; }
     DbSet<RestaurantMenu> RestaurantMenus { get; }
     DbSet<MenuCategory> MenuCategories { get; }
     DbSet<MenuItem> MenuItems { get; }

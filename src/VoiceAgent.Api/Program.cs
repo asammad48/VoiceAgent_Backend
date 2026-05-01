@@ -6,6 +6,7 @@ using VoiceAgent.Common;
 using VoiceAgent.Infrastructure;
 using VoiceAgent.Infrastructure.Persistence;
 using VoiceAgent.Infrastructure.Persistence.Seed;
+using VoiceAgent.Application.Interfaces.Voice;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -59,8 +60,28 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("LocalFrontend");
+app.UseWebSockets();
 app.MapHealthChecks("/health");
 app.MapControllers();
+
+app.Map("/api/voice/web-stream", async context =>
+{
+    if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
+    using var scope = context.RequestServices.CreateScope();
+    var orchestrator = scope.ServiceProvider.GetRequiredService<IVoiceStreamOrchestrator>();
+    using var socket = await context.WebSockets.AcceptWebSocketAsync();
+    await orchestrator.HandleWebSocketAsync(socket, "web", context.RequestAborted);
+});
+
+app.Map("/api/voice/phone-stream", async context =>
+{
+    if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
+    using var scope = context.RequestServices.CreateScope();
+    var orchestrator = scope.ServiceProvider.GetRequiredService<IVoiceStreamOrchestrator>();
+    using var socket = await context.WebSockets.AcceptWebSocketAsync();
+    await orchestrator.HandleWebSocketAsync(socket, "phone", context.RequestAborted);
+});
+
 
 Log.Information("VoiceAgent API startup complete.");
 app.Run();
