@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using VoiceAgent.Application.Abstractions;
-using VoiceAgent.Application.DTOs.Demo;
+using VoiceAgent.Application.Dtos.Demo;
 using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Domain.Entities;
 using VoiceAgent.Domain.Enums;

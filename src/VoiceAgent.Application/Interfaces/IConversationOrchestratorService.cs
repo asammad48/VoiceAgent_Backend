@@ -1,4 +1,4 @@
-using VoiceAgent.Application.DTOs.Demo;
+using VoiceAgent.Application.Dtos.Demo;
 
 namespace VoiceAgent.Application.Interfaces;
 

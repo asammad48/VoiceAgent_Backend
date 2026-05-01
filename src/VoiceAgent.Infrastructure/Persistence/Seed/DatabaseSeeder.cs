@@ -28,8 +28,8 @@ public static class DatabaseSeeder
             new Client { Id = DemoCourierClientId, TenantId = DemoTenantId, Name = "Demo Courier", AgentName = "Sam", IndustryType = "courier" });
 
         dbContext.Branches.AddRange(
-            new Branch { Id = branchId, TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, Name = "Main Branch", Timezone = "UTC" },
-            new Branch { Id = Guid.Parse("10000000-0000-0000-0000-000000000021"), TenantId = DemoTenantId, ClientId = DemoCourierClientId, Name = "Hub", Timezone = "UTC" });
+            new Branch { Id = branchId, TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, Name = "Main Branch" },
+            new Branch { Id = Guid.Parse("10000000-0000-0000-0000-000000000021"), TenantId = DemoTenantId, ClientId = DemoCourierClientId, Name = "Hub" });
 
         dbContext.Campaigns.AddRange(
             new Campaign { Id = RestaurantCampaignId, TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, Name = "Restaurant Demo", CampaignType = CampaignType.RestaurantOrder, Direction = CampaignDirection.Inbound, IsDemoEnabled = true, IsActive = true },
@@ -46,14 +46,15 @@ public static class DatabaseSeeder
         dbContext.RestaurantMenus.Add(new RestaurantMenu { Id = menuId, TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, Name = "Main Menu", IsActive = true });
         dbContext.MenuCategories.Add(new MenuCategory { Id = catId, TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, MenuId = menuId, Name = "Burgers", SortOrder = 1, IsActive = true });
         dbContext.MenuItems.Add(new MenuItem { Id = itemId, TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, MenuId = menuId, CategoryId = catId, Name = "Classic Burger", Description = "", BasePrice = 8.99m, Currency = "USD", IsAvailable = true, IsActive = true });
-        dbContext.MenuItemAddons.Add(new MenuItemAddon { Id = Guid.Parse("10000000-0000-0000-0000-000000000033"), TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, MenuItemId = itemId, Name = "Cheese", PriceDelta = 1, IsDefault = false });
+        dbContext.MenuItems.Add(new MenuItem { Id = Guid.Parse("10000000-0000-0000-0000-000000000036"), TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, MenuId = menuId, CategoryId = catId, Name = "Chicken Burger", Description = "", BasePrice = 9.49m, Currency = "USD", IsAvailable = true, IsActive = true });
+        dbContext.MenuItemAddons.Add(new MenuItemAddon { Id = Guid.Parse("10000000-0000-0000-0000-000000000033"), TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, MenuItemId = itemId, Name = "Cheese", Price = 1, IsAvailable = true });
         dbContext.RestaurantDeals.Add(new RestaurantDeal { Id = Guid.Parse("10000000-0000-0000-0000-000000000034"), TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, Name = "Lunch Combo", Description = "", DealPrice = 10.99m, Currency = "USD", IsAvailable = true, IsActive = true });
         dbContext.CourierPricingProfiles.Add(new CourierPricingProfile { Id = Guid.Parse("10000000-0000-0000-0000-000000000035"), TenantId = DemoTenantId, ClientId = DemoCourierClientId, Name = "Standard", Currency = "USD", BaseFee = 4, PricePerKm = 1.2m, PricePerKg = 0.8m, MinimumFee = 6, IsActive = true });
 
         var kbId = Guid.Parse("10000000-0000-0000-0000-000000000040");
         var docId = Guid.Parse("10000000-0000-0000-0000-000000000041");
         dbContext.KnowledgeBases.Add(new KnowledgeBase { Id = kbId, TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, Name = "Restaurant KB", IsActive = true });
-        dbContext.KnowledgeDocuments.Add(new KnowledgeDocument { Id = docId, TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, KnowledgeBaseId = kbId, Title = "FAQ", SourceType = "seed", IsActive = true });
+        dbContext.KnowledgeDocuments.Add(new KnowledgeDocument { Id = docId, TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, KnowledgeBaseId = kbId, Title = "FAQ", DocumentType = "seed", Content = "FAQ seed content", MetadataJson = "{}", IsActive = true });
         dbContext.KnowledgeChunks.Add(new KnowledgeChunk { Id = Guid.Parse("10000000-0000-0000-0000-000000000042"), TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, CampaignId = RestaurantCampaignId, KnowledgeBaseId = kbId, KnowledgeDocumentId = docId, ChunkText = "We open at 9 AM.", EmbeddingJson = "[]", MetadataJson = "{}", IsActive = true });
         dbContext.ExternalApiConfigurations.Add(new ExternalApiConfiguration { Id = Guid.Parse("10000000-0000-0000-0000-000000000043"), TenantId = DemoTenantId, ClientId = DemoRestaurantClientId, CampaignId = RestaurantCampaignId, Name = "Disabled", BaseUrl = "https://example.com", AuthType = "none", HeadersJson = "{}", EndpointsJson = "{}", SecretReferenceJson = "{}", IsEnabled = false });
 

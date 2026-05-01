@@ -1,2 +1,8 @@
+using VoiceAgent.Application.Dtos.Calls;
+
 namespace VoiceAgent.Application.Interfaces;
-public interface ICallQueryService { Task<object?> GetSessionAsync(Guid callSessionId, CancellationToken ct=default); }
+
+public interface ICallQueryService
+{
+    Task<CallSessionResponseDto?> GetSessionAsync(Guid callSessionId, CancellationToken ct = default);
+}
