@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using VoiceAgent.Application.Abstractions;
 using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Application.Interfaces.Voice;
@@ -43,9 +42,6 @@ public class VoiceStreamOrchestrator(IAppDbContext db, IAudioStreamRouter audioR
             await AppendEvent(callSessionId, "stt_partial", new { transcript }, ct);
 
             if (!speechEndDetectionService.IsSpeechEnded(transcript)) continue;
-
-            db.CallTurns.Add(new CallTurn { Id = Guid.NewGuid(), CallSessionId = callSessionId, Speaker = "user", Text = transcript, TurnNumber = await db.CallTurns.CountAsync(x => x.CallSessionId == callSessionId, ct) + 1 });
-            await db.SaveChangesAsync(ct);
 
             var reply = await orchestrator.OrchestrateAsync(callSessionId, transcript, ct);
             BotSpeakingBySession[callSessionId] = true;

@@ -11,8 +11,20 @@ public class WebhookRetryWorker(ILogger<WebhookRetryWorker> logger) : Background
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            logger.LogInformation("WebhookRetryWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
-            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+            try
+            {
+                logger.LogInformation("WebhookRetryWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
+                await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Unhandled error in worker loop");
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
         }
     }
 }

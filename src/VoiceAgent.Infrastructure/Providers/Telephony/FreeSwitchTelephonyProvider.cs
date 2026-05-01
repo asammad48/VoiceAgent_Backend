@@ -6,5 +6,10 @@ public sealed class FreeSwitchTelephonyProvider(IOptions<FreeSwitchOptions> opti
 {
     private readonly FreeSwitchOptions _options = optionsAccessor.Value;
     public Task<string> DialAsync(string phone, CancellationToken ct = default)
-        => Task.FromResult(_options.UseMockProviders ? "mock-call-id" : string.Empty);
+    {
+        if (_options.UseMockProviders) return Task.FromResult("mock-call-id");
+        if (string.IsNullOrWhiteSpace(_options.Host))
+            throw new InvalidOperationException("FreeSwitch Host is required when UseMockProviders=false.");
+        throw new NotSupportedException("FreeSwitch real dial is not yet implemented. Configure Telnyx or enable mock mode.");
+    }
 }
