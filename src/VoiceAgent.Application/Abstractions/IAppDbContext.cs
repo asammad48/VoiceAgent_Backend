@@ -17,6 +17,10 @@ public interface IAppDbContext
     DbSet<RestaurantMenu> RestaurantMenus { get; }
     DbSet<MenuCategory> MenuCategories { get; }
     DbSet<MenuItem> MenuItems { get; }
+    DbSet<MenuItemAddon> MenuItemAddons { get; }
+    DbSet<RestaurantOrder> RestaurantOrders { get; }
+    DbSet<CourierQuote> CourierQuotes { get; }
+    DbSet<CourierOrder> CourierOrders { get; }
     DbSet<RestaurantDeal> RestaurantDeals { get; }
     DbSet<CourierPricingProfile> CourierPricingProfiles { get; }
     DbSet<KnowledgeBase> KnowledgeBases { get; }

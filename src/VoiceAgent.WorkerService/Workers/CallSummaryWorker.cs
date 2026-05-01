@@ -11,8 +11,20 @@ public class CallSummaryWorker(ILogger<CallSummaryWorker> logger) : BackgroundSe
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            logger.LogInformation("CallSummaryWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
-            await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+            try
+            {
+                logger.LogInformation("CallSummaryWorker heartbeat at: {TimeUtc}", DateTimeOffset.UtcNow);
+                await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Unhandled error in worker loop");
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
         }
     }
 }

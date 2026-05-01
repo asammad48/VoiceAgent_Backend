@@ -9,7 +9,7 @@ namespace VoiceAgent.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class DemoController(IDemoConversationService demoService, ICallQueryService callQueryService) : ControllerBase
+public class DemoController(IDemoConversationService demoService) : ControllerBase
 {
     [HttpGet("campaigns")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<CampaignResponseDto>>>> Campaigns(CancellationToken ct)
@@ -34,5 +34,5 @@ public class DemoController(IDemoConversationService demoService, ICallQueryServ
 
     [HttpGet("{callSessionId:guid}")]
     public async Task<ActionResult<ApiResponse<CallSessionResponseDto?>>> Get(Guid callSessionId, CancellationToken ct)
-        => Ok(ApiResponse<CallSessionResponseDto?>.Ok(await callQueryService.GetSessionAsync(callSessionId, ct), "Call session loaded."));
+        => Ok(ApiResponse<CallSessionResponseDto?>.Ok(await demoService.GetSessionAsync(callSessionId, ct), "Call session loaded."));
 }

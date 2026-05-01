@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using VoiceAgent.Application.Abstractions;
 using VoiceAgent.Application.Dtos.Campaigns;
+using VoiceAgent.Application.Dtos.Calls;
 using VoiceAgent.Application.Dtos.Demo;
 using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Domain.Entities;
@@ -87,6 +88,30 @@ public class DemoConversationService(IAppDbContext db, IConversationOrchestrator
 
     public Task<SendDemoMessageResponseDto> SendAsync(SendDemoMessageRequestDto request, CancellationToken ct = default)
         => orchestrator.ProcessMessageAsync(request.CallSessionId, request.Message, ct);
+
+
+    public async Task<CallSessionResponseDto?> GetSessionAsync(Guid callSessionId, CancellationToken ct = default)
+    {
+        return await db.CallSessions
+            .Where(x => x.Id == callSessionId)
+            .Select(x => new CallSessionResponseDto
+            {
+                Id = x.Id,
+                TenantId = x.TenantId,
+                ClientId = x.ClientId,
+                CampaignId = x.CampaignId,
+                Status = x.Status.ToString(),
+                Channel = x.Channel.ToString(),
+                Direction = x.Direction.ToString(),
+                CurrentState = x.CurrentState.ToString(),
+                CorrelationId = x.CorrelationId,
+                CreatedOn = x.CreatedOn,
+                StartedAt = x.StartedAt,
+                EndedAt = x.EndedAt,
+                DurationSeconds = x.DurationSeconds
+            })
+            .FirstOrDefaultAsync(ct);
+    }
 
     public async Task<bool> EndAsync(Guid callSessionId, CancellationToken ct = default)
     {
