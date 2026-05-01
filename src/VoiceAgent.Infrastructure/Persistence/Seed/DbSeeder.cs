@@ -17,8 +17,8 @@ public class DbSeeder(AppDbContext db)
         var campaignId = Guid.Parse("33333333-3333-3333-3333-333333333333");
 
         db.Tenants.Add(new Tenant { Id = tenantId, Name = "Demo Tenant", Slug = "demo-tenant", DefaultTimezone = "UTC", DefaultCurrency = "USD" });
-        db.Clients.Add(new Client { Id = clientId, TenantId = tenantId, Name = "Demo Restaurant+Courier", AgentName = "Ava", IndustryType = "multi" });
-        db.Campaigns.Add(new Campaign { Id = campaignId, TenantId = tenantId, ClientId = clientId, Name = "Restaurant and Courier", AgentName = "Ava", CampaignType = CampaignType.RestaurantOrder, Direction = CampaignDirection.Inbound, IsActive = true, IsDemoEnabled = true });
+        db.Clients.Add(new Client { Id = clientId, TenantId = tenantId, Name = "Demo Restaurant+Courier", IndustryType = "multi" });
+        db.Campaigns.Add(new Campaign { Id = campaignId, TenantId = tenantId, ClientId = clientId, Name = "Restaurant and Courier", CampaignType = CampaignType.RestaurantOrder, Direction = CampaignDirection.Inbound, IsActive = true, IsDemoEnabled = true });
         db.MenuItems.AddRange(
             new MenuItem { Id = Guid.NewGuid(), TenantId = tenantId, ClientId = clientId, MenuId = Guid.NewGuid(), CategoryId = Guid.NewGuid(), Name = "Classic Burger", Currency = "USD", BasePrice = 8.99m, IsAvailable = true },
             new MenuItem { Id = Guid.NewGuid(), TenantId = tenantId, ClientId = clientId, MenuId = Guid.NewGuid(), CategoryId = Guid.NewGuid(), Name = "Chicken Pizza", Currency = "USD", BasePrice = 12.50m, IsAvailable = true });
