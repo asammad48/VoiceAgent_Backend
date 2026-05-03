@@ -42,16 +42,23 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+}
 
-    using var scope = app.Services.CreateScope();
+using (var scope = app.Services.CreateScope())
+{
     try
     {
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         Log.Information("Applying database migrations...");
         db.Database.Migrate();
-        Log.Information("Database migration complete. Seeding demo data...");
-        await DatabaseSeeder.SeedAsync(db);
-        Log.Information("Database seed complete.");
+        Log.Information("Database migration complete.");
+
+        if (app.Environment.IsDevelopment())
+        {
+            Log.Information("Seeding demo data...");
+            await DatabaseSeeder.SeedAsync(db);
+            Log.Information("Database seed complete.");
+        }
     }
     catch (Exception ex)
     {
