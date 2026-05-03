@@ -8,7 +8,7 @@ using VoiceAgent.Common.Responses;
 namespace VoiceAgent.Api.Controllers;
 
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/demo")]
 public class DemoController(IDemoConversationService demoService) : ControllerBase
 {
     [HttpGet("campaigns")]

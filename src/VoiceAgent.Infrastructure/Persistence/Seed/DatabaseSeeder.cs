@@ -48,6 +48,9 @@ public static class DatabaseSeeder
         dbContext.OutboundLeads.AddRange(SalesSeed.Leads);
 
         await dbContext.SaveChangesAsync();
+
+        var seededRoles = string.Join(", ", AuthSeed.Users.Select(u => u.Role).Distinct());
+        logger?.LogInformation("Seeded mock auth users: {Count}. Roles available: {Roles}", AuthSeed.Users.Count, seededRoles);
         logger?.LogInformation("Seed completed");
     }
 }

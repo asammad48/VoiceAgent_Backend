@@ -1,2 +1,19 @@
-using Microsoft.AspNetCore.Mvc; using VoiceAgent.Application.Interfaces; using VoiceAgent.Common.Responses;
-namespace VoiceAgent.Api.Controllers; [ApiController][Route("api/[controller]")] public class TenantsController(ITenantService service):ControllerBase{ [HttpPost] public async Task<ActionResult<ApiResponse<Guid>>> Create([FromBody] object request,CancellationToken ct)=>Ok(new ApiResponse<Guid>{Success=true,Data=await service.CreateAsync(request,ct)}); [HttpGet] public ActionResult<ApiResponse<object>> Get()=>Ok(new ApiResponse<object>{Success=true,Data=Array.Empty<object>()}); }
+using Microsoft.AspNetCore.Mvc;
+using VoiceAgent.Application.Dtos.Tenants;
+using VoiceAgent.Application.Interfaces;
+using VoiceAgent.Common.Responses;
+
+namespace VoiceAgent.Api.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class TenantsController(ITenantService service) : ControllerBase
+{
+    [HttpPost]
+    public async Task<ActionResult<ApiResponse<Guid>>> Create([FromBody] CreateTenantRequestDto request, CancellationToken ct)
+        => Ok(new ApiResponse<Guid> { Success = true, Data = await service.CreateAsync(request, ct) });
+
+    [HttpGet]
+    public ActionResult<ApiResponse<object>> Get()
+        => Ok(new ApiResponse<object> { Success = true, Data = Array.Empty<object>() });
+}
