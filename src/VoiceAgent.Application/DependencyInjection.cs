@@ -14,6 +14,7 @@ public static class DependencyInjection
     {
         services.AddAutoMapper(typeof(DependencyInjection).Assembly);
         services.AddScoped<IDemoConversationService, DemoConversationService>();
+        services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IConversationOrchestratorService, ConversationOrchestratorService>();
         services.AddScoped<ITenantService, TenantService>();
         services.AddScoped<IClientService, ClientService>();

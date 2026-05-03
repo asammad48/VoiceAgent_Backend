@@ -28,5 +28,6 @@ public interface IAppDbContext
     DbSet<KnowledgeChunk> KnowledgeChunks { get; }
     DbSet<ExternalApiConfiguration> ExternalApiConfigurations { get; }
     DbSet<ToolCallLog> ToolCallLogs { get; }
+    DbSet<PlatformUser> PlatformUsers { get; }
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

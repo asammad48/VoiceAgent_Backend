@@ -46,6 +46,7 @@ public static class DatabaseSeeder
 
         dbContext.ExternalApiConfigurations.AddRange(ExternalApiSeed.All);
         dbContext.OutboundLeads.AddRange(SalesSeed.Leads);
+        dbContext.PlatformUsers.AddRange(AuthSeed.AsEntities());
 
         await dbContext.SaveChangesAsync();
 

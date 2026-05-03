@@ -41,6 +41,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<ToolCallLog> ToolCallLogs => Set<ToolCallLog>();
     public DbSet<ExternalSystemLog> ExternalSystemLogs => Set<ExternalSystemLog>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<PlatformUser> PlatformUsers => Set<PlatformUser>();
     public DbSet<OutboundCampaignRun> OutboundCampaignRuns => Set<OutboundCampaignRun>();
     public DbSet<OutboundLead> OutboundLeads => Set<OutboundLead>();
     public DbSet<OutboundAttempt> OutboundAttempts => Set<OutboundAttempt>();
@@ -60,5 +61,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<KnowledgeChunk>().Property(x => x.EmbeddingJson).HasColumnType("jsonb");
         modelBuilder.Entity<KnowledgeChunk>().Property(x => x.MetadataJson).HasColumnType("jsonb");
         modelBuilder.Entity<ExternalApiConfiguration>().Property(x => x.HeadersJson).HasColumnType("jsonb");
-            }
+
+        modelBuilder.Entity<PlatformUser>()
+            .HasIndex(x => new { x.TenantId, x.Email })
+            .IsUnique();
+    }
 }
