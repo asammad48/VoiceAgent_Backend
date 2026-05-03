@@ -1,17 +1,16 @@
-using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using VoiceAgent.Application.Dtos.Auth;
+using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Common.Responses;
-using VoiceAgent.Infrastructure.Persistence.Seed;
 
 namespace VoiceAgent.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class AuthController(IConfiguration configuration) : ControllerBase
+public class AuthController(IConfiguration configuration, IAuthService authService) : ControllerBase
 {
     [HttpPost("login")]
-    public ActionResult<ApiResponse<LoginResponseDto>> Login([FromBody] LoginRequestDto request)
+    public async Task<ActionResult<ApiResponse<LoginResponseDto>>> Login([FromBody] LoginRequestDto request, CancellationToken ct)
     {
         var useMockProviders = configuration.GetValue<bool>("FeatureFlags:UseMockProviders", true);
         if (!useMockProviders)
@@ -19,24 +18,13 @@ public class AuthController(IConfiguration configuration) : ControllerBase
             return StatusCode(StatusCodes.Status501NotImplemented,
                 ApiResponse<LoginResponseDto>.Fail("Auth mock login is disabled because FeatureFlags:UseMockProviders=false. Configure real auth provider."));
         }
-        var user = AuthSeed.Users.FirstOrDefault(x =>
-            string.Equals(x.Email, request.Email, StringComparison.OrdinalIgnoreCase) &&
-            x.Password == request.Password);
 
-        if (user is null)
+        var login = await authService.LoginAsync(request, ct);
+        if (login is null)
         {
             return Unauthorized(ApiResponse<LoginResponseDto>.Fail("Invalid email or password."));
         }
 
-        var tokenPayload = $"{user.Email}|{user.Role}|{user.TenantId}|{user.ClientId}";
-        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(tokenPayload));
-
-        return Ok(ApiResponse<LoginResponseDto>.Ok(new LoginResponseDto
-        {
-            Token = token,
-            Role = user.Role.ToString(),
-            TenantId = user.TenantId,
-            ClientId = user.ClientId
-        }, "Login successful."));
+        return Ok(ApiResponse<LoginResponseDto>.Ok(login, "Login successful."));
     }
 }
