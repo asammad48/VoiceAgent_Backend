@@ -42,6 +42,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<ExternalSystemLog> ExternalSystemLogs => Set<ExternalSystemLog>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<PlatformUser> PlatformUsers => Set<PlatformUser>();
+    public DbSet<ContactUs> ContactUsMessages => Set<ContactUs>();
     public DbSet<OutboundCampaignRun> OutboundCampaignRuns => Set<OutboundCampaignRun>();
     public DbSet<OutboundLead> OutboundLeads => Set<OutboundLead>();
     public DbSet<OutboundAttempt> OutboundAttempts => Set<OutboundAttempt>();
