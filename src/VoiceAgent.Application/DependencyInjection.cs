@@ -28,6 +28,7 @@ public static class DependencyInjection
         services.AddScoped<IKnowledgeBaseService, KnowledgeBaseService>();
         services.AddScoped<IExternalApiConfigurationService, ExternalApiConfigurationService>();
         services.AddScoped<IProviderCostService, ProviderCostService>();
+        services.AddScoped<IContactUsService, ContactUsService>();
         services.AddScoped<VoiceAgent.Application.Services.Rag.IRagRetrievalService, VoiceAgent.Application.Services.Rag.DbRagRetrievalService>();
         services.AddScoped<IToolExecutionService, ToolExecutionService>();
         services.AddScoped<IVoiceSessionService, VoiceSessionService>();
