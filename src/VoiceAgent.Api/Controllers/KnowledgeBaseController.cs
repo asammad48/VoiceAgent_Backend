@@ -22,6 +22,16 @@ public class KnowledgeBaseController(IKnowledgeBaseService service) : Controller
         => Ok(new ApiResponse<IReadOnlyList<SearchKnowledgeResponseDto>> { Success = true, Data = Array.Empty<SearchKnowledgeResponseDto>() });
 
     [HttpPost("knowledge/reindex")]
-    public ActionResult<ApiResponse<object>> Reindex([FromBody] CreateKnowledgeBaseRequestDto request)
-        => Ok(new ApiResponse<object> { Success = true, Data = new { accepted = true, request.CampaignId } });
+    public ActionResult<ApiResponse<ReindexKnowledgeResponseDto>> Reindex([FromBody] ReindexKnowledgeRequestDto request)
+        => Ok(new ApiResponse<ReindexKnowledgeResponseDto>
+        {
+            Success = true,
+            Data = new ReindexKnowledgeResponseDto
+            {
+                KnowledgeBaseId = request.KnowledgeBaseId,
+                Status = "Queued",
+                DocumentsQueued = 0,
+                Message = "Reindex job queued successfully"
+            }
+        });
 }
