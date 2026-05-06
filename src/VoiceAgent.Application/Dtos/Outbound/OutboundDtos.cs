@@ -1,0 +1,6 @@
+namespace VoiceAgent.Application.Dtos.Outbound;
+
+public sealed class CreateOutboundRunRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid CampaignId { get; set; } public string Name { get; set; } = string.Empty; }
+public sealed class OutboundRunDto { public Guid Id { get; set; } public Guid CampaignId { get; set; } public string Name { get; set; } = string.Empty; public string Status { get; set; } = string.Empty; public DateTime StartedAt { get; set; } }
+public sealed class UpsertOutboundLeadRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid CampaignId { get; set; } public string Name { get; set; } = string.Empty; public string Phone { get; set; } = string.Empty; public string Email { get; set; } = string.Empty; public string DataJson { get; set; } = "{}"; public string Status { get; set; } = "new"; public bool OptedOut { get; set; } }
+public sealed class OutboundLeadDto { public Guid Id { get; set; } public Guid CampaignId { get; set; } public string Name { get; set; } = string.Empty; public string Phone { get; set; } = string.Empty; public string Status { get; set; } = string.Empty; public bool OptedOut { get; set; } }
