@@ -16,4 +16,8 @@ public class TenantsController(ITenantService service) : ControllerBase
     [HttpGet]
     public ActionResult<ApiResponse<IReadOnlyList<TenantResponseDto>>> Get()
         => Ok(new ApiResponse<IReadOnlyList<TenantResponseDto>> { Success = true, Data = Array.Empty<TenantResponseDto>() });
+
+    [HttpPatch("{id:guid}")]
+    public async Task<ActionResult<ApiResponse<bool>>> Update([FromRoute] Guid id, [FromBody] UpdateTenantRequestDto request, CancellationToken ct)
+        => Ok(new ApiResponse<bool> { Success = true, Data = await service.UpdateAsync(id, request, ct) });
 }
