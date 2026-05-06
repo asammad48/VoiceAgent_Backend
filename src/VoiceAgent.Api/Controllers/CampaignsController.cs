@@ -13,11 +13,18 @@ public class CampaignsController(ICampaignService service) : ControllerBase
     public async Task<ActionResult<ApiResponse<Guid>>> Create([FromBody] CreateCampaignRequestDto request, CancellationToken ct)
         => Ok(new ApiResponse<Guid> { Success = true, Data = await service.CreateAsync(request, ct) });
 
+    
+    [HttpPatch("{id:guid}")]
+    public ActionResult<ApiResponse<bool>> Update(Guid id, [FromBody] UpdateCampaignRequestDto request)
+        => Ok(id == Guid.Empty
+            ? ApiResponse<bool>.Fail("Campaign not found.")
+            : ApiResponse<bool>.Ok(true, "Campaign updated."));
+
     [HttpGet("by-client/{clientId:guid}")]
-    public ActionResult<ApiResponse<object>> ByClient(Guid clientId)
-        => Ok(new ApiResponse<object> { Success = true, Data = new { clientId, items = Array.Empty<object>() } });
+    public ActionResult<ApiResponse<IReadOnlyList<CampaignResponseDto>>> ByClient(Guid clientId)
+        => Ok(new ApiResponse<IReadOnlyList<CampaignResponseDto>> { Success = true, Data = Array.Empty<CampaignResponseDto>() });
 
     [HttpGet("demo")]
-    public ActionResult<ApiResponse<object>> Demo()
-        => Ok(new ApiResponse<object> { Success = true, Data = Array.Empty<object>() });
+    public ActionResult<ApiResponse<IReadOnlyList<CampaignResponseDto>>> Demo()
+        => Ok(new ApiResponse<IReadOnlyList<CampaignResponseDto>> { Success = true, Data = Array.Empty<CampaignResponseDto>() });
 }

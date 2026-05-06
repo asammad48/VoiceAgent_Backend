@@ -13,7 +13,14 @@ public class ExternalApiConfigurationsController(IExternalApiConfigurationServic
     public async Task<ActionResult<ApiResponse<Guid>>> Create([FromBody] CreateExternalApiConfigurationRequestDto request, CancellationToken ct)
         => Ok(new ApiResponse<Guid> { Success = true, Data = await service.CreateAsync(request, ct) });
 
+    
+    [HttpPatch("{id:guid}")]
+    public ActionResult<ApiResponse<bool>> Update(Guid id, [FromBody] UpdateExternalApiConfigurationRequestDto request)
+        => Ok(id == Guid.Empty
+            ? ApiResponse<bool>.Fail("External API configuration not found.")
+            : ApiResponse<bool>.Ok(true, "External API configuration updated."));
+
     [HttpGet("by-campaign/{campaignId:guid}")]
-    public ActionResult<ApiResponse<object>> ByCampaign(Guid campaignId)
-        => Ok(new ApiResponse<object> { Success = true, Data = new { campaignId, items = Array.Empty<object>() } });
+    public ActionResult<ApiResponse<IReadOnlyList<ExternalApiConfigurationResponseDto>>> ByCampaign(Guid campaignId)
+        => Ok(new ApiResponse<IReadOnlyList<ExternalApiConfigurationResponseDto>> { Success = true, Data = Array.Empty<ExternalApiConfigurationResponseDto>() });
 }

@@ -14,8 +14,8 @@ public class KnowledgeBaseController(IKnowledgeBaseService service) : Controller
         => Ok(new ApiResponse<Guid> { Success = true, Data = await service.CreateBaseAsync(request, ct) });
 
     [HttpPost("knowledge-documents")]
-    public ActionResult<ApiResponse<CreateKnowledgeDocumentRequestDto>> CreateDocument([FromBody] CreateKnowledgeDocumentRequestDto request)
-        => Ok(new ApiResponse<CreateKnowledgeDocumentRequestDto> { Success = true, Data = request });
+    public ActionResult<ApiResponse<Guid>> CreateDocument([FromBody] CreateKnowledgeDocumentRequestDto request)
+        => Ok(new ApiResponse<Guid> { Success = true, Data = Guid.NewGuid() });
 
     [HttpPost("knowledge/search")]
     public ActionResult<ApiResponse<IReadOnlyList<SearchKnowledgeResponseDto>>> Search([FromBody] SearchKnowledgeRequestDto request)

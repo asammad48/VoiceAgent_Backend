@@ -1,5 +1,31 @@
 namespace VoiceAgent.Application.Dtos.Courier;
-public class CreateCourierPricingProfileRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid? BranchId { get; set; } public string Name { get; set; } = string.Empty; public string Currency { get; set; } = string.Empty; public decimal BaseFee { get; set; } public decimal PricePerKm { get; set; } public decimal PricePerKg { get; set; } public decimal MinimumFee { get; set; } }
-public class CourierPricingProfileResponseDto { public Guid Id { get; set; } public string Name { get; set; } = string.Empty; public string Currency { get; set; } = string.Empty; public decimal BaseFee { get; set; } }
+
+public class CreateCourierPricingProfileRequestDto
+{
+    public Guid TenantId { get; set; }
+    public Guid ClientId { get; set; }
+    public Guid? BranchId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Currency { get; set; } = string.Empty;
+    public decimal BaseFee { get; set; }
+    public decimal PricePerKm { get; set; }
+    public decimal PricePerKg { get; set; }
+    public decimal MinimumFee { get; set; }
+    public decimal? MaxDistanceKm { get; set; }
+    public string? SettingsJson { get; set; }
+    public bool? IsActive { get; set; }
+}
+
+public class CourierPricingProfileResponseDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Currency { get; set; } = string.Empty;
+    public decimal BaseFee { get; set; }
+    public decimal? MaxDistanceKm { get; set; }
+    public string? SettingsJson { get; set; }
+    public bool IsActive { get; set; }
+}
+
 public class TestCourierQuoteRequestDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public decimal DistanceKm { get; set; } public decimal WeightKg { get; set; } }
 public class TestCourierQuoteResponseDto { public decimal BaseFee { get; set; } public decimal DistanceFee { get; set; } public decimal WeightFee { get; set; } public decimal Total { get; set; } public string Currency { get; set; } = string.Empty; }

@@ -24,12 +24,12 @@ public class DemoController(IDemoConversationService demoService) : ControllerBa
         => Ok(ApiResponse<SendDemoMessageResponseDto>.Ok(await demoService.SendAsync(request, ct), "Message processed."));
 
     [HttpPost("end")]
-    public async Task<ActionResult<ApiResponse<object>>> End([FromBody] EndDemoConversationRequestDto request, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<EndDemoConversationResponseDto>>> End([FromBody] EndDemoConversationRequestDto request, CancellationToken ct)
     {
         var ended = await demoService.EndAsync(request.CallSessionId, ct);
         return Ok(ended
-            ? ApiResponse<object>.Ok(new { request.CallSessionId, Status = "Completed" }, "Demo conversation ended.")
-            : ApiResponse<object>.Fail("Call session not found."));
+            ? ApiResponse<EndDemoConversationResponseDto>.Ok(new EndDemoConversationResponseDto { CallSessionId = request.CallSessionId, Status = "Completed" }, "Demo conversation ended.")
+            : ApiResponse<EndDemoConversationResponseDto>.Fail("Call session not found."));
     }
 
     [HttpGet("{callSessionId:guid}")]

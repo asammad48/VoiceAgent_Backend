@@ -14,6 +14,6 @@ public class TenantsController(ITenantService service) : ControllerBase
         => Ok(new ApiResponse<Guid> { Success = true, Data = await service.CreateAsync(request, ct) });
 
     [HttpGet]
-    public ActionResult<ApiResponse<object>> Get()
-        => Ok(new ApiResponse<object> { Success = true, Data = Array.Empty<object>() });
+    public ActionResult<ApiResponse<IReadOnlyList<TenantResponseDto>>> Get()
+        => Ok(new ApiResponse<IReadOnlyList<TenantResponseDto>> { Success = true, Data = Array.Empty<TenantResponseDto>() });
 }
