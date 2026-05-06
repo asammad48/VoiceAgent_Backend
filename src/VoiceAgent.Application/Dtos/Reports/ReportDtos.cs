@@ -1,0 +1,4 @@
+namespace VoiceAgent.Application.Dtos.Reports;
+public sealed class BillingCostReportItemDto { public Guid TenantId { get; set; } public Guid ClientId { get; set; } public Guid CampaignId { get; set; } public decimal EstimatedCost { get; set; } public DateTime CreatedOn { get; set; } }
+public sealed class CallUsageReportItemDto { public Guid CallSessionId { get; set; } public int LlmInputTokens { get; set; } public int LlmOutputTokens { get; set; } public int TtsCharacters { get; set; } public int SttAudioSeconds { get; set; } public int CallDurationSeconds { get; set; } public DateTime CreatedOn { get; set; } }
+public sealed class OutboundPerformanceReportItemDto { public Guid LeadId { get; set; } public Guid CampaignId { get; set; } public string Status { get; set; } = string.Empty; public bool OptedOut { get; set; } public DateTime CreatedOn { get; set; } }

@@ -13,7 +13,6 @@ public interface IAppDbContext
     DbSet<CallSession> CallSessions { get; }
     DbSet<CallTurn> CallTurns { get; }
     DbSet<CallEvent> CallEvents { get; }
-    DbSet<CallCostLog> CallCostLogs { get; }
     DbSet<RestaurantMenu> RestaurantMenus { get; }
     DbSet<MenuCategory> MenuCategories { get; }
     DbSet<MenuItem> MenuItems { get; }
@@ -22,6 +21,13 @@ public interface IAppDbContext
     DbSet<CourierQuote> CourierQuotes { get; }
     DbSet<CourierOrder> CourierOrders { get; }
     DbSet<RestaurantDeal> RestaurantDeals { get; }
+    DbSet<CallRecording> CallRecordings { get; }
+    DbSet<RestaurantDealItem> RestaurantDealItems { get; }
+    DbSet<RestaurantDealAddon> RestaurantDealAddons { get; }
+    DbSet<RestaurantDealChoiceGroup> RestaurantDealChoiceGroups { get; }
+    DbSet<CallCostLog> CallCostLogs { get; }
+    DbSet<OutboundCampaignRun> OutboundCampaignRuns { get; }
+    DbSet<OutboundLead> OutboundLeads { get; }
     DbSet<CourierPricingProfile> CourierPricingProfiles { get; }
     DbSet<KnowledgeBase> KnowledgeBases { get; }
     DbSet<KnowledgeDocument> KnowledgeDocuments { get; }
