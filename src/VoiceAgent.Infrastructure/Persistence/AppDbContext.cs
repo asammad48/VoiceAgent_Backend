@@ -56,6 +56,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<CampaignConfiguration>().Property(x => x.RequiredSlotsJson).HasColumnType("jsonb");
         modelBuilder.Entity<CampaignConfiguration>().Property(x => x.OptionalSlotsJson).HasColumnType("jsonb");
         modelBuilder.Entity<CampaignConfiguration>().Property(x => x.AllowedToolsJson).HasColumnType("jsonb");
+        modelBuilder.Entity<CampaignConfiguration>().Property(x => x.QuestionnaireJson).HasColumnType("jsonb");
                 modelBuilder.Entity<MenuItem>().Property(x => x.MetadataJson).HasColumnType("jsonb");
         modelBuilder.Entity<RestaurantDeal>().Property(x => x.AvailabilityScheduleJson).HasColumnType("jsonb");
         modelBuilder.Entity<RestaurantDeal>().Property(x => x.MetadataJson).HasColumnType("jsonb");

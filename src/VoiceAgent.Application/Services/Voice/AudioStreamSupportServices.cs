@@ -16,7 +16,10 @@ public class AudioStreamRouter(IStreamingSpeechToTextProvider stt, IStreamingTex
 
 public class SpeechEndDetectionService : ISpeechEndDetectionService
 {
-    public bool IsSpeechEnded(string partialOrFinalTranscript) => partialOrFinalTranscript.Trim().EndsWith('.') || partialOrFinalTranscript.Length > 24;
+    // Primary detection is now handled by the accumulator in VoiceStreamOrchestrator.
+    // This method is retained for the interface; it checks sentence-ending punctuation only.
+    public bool IsSpeechEnded(string partialOrFinalTranscript)
+        => partialOrFinalTranscript.TrimEnd() is { Length: > 0 } t && t[^1] is '.' or '?' or '!';
 }
 
 public class BargeInService : IBargeInService

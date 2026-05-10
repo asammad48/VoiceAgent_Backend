@@ -12,7 +12,7 @@ using VoiceAgent.Infrastructure.Persistence;
 namespace VoiceAgent.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260504173648_InitialCreate")]
+    [Migration("20260509204932_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -432,6 +432,9 @@ namespace VoiceAgent.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("OptionalSlotsJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("QuestionnaireJson")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("RagSettingsJson")

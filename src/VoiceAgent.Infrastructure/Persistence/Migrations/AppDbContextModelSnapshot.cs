@@ -431,6 +431,9 @@ namespace VoiceAgent.Infrastructure.Persistence.Migrations
                     b.Property<string>("OptionalSlotsJson")
                         .HasColumnType("jsonb");
 
+                    b.Property<string>("QuestionnaireJson")
+                        .HasColumnType("jsonb");
+
                     b.Property<string>("RagSettingsJson")
                         .HasColumnType("text");
 

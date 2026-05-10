@@ -13,7 +13,7 @@ public sealed class GeminiClient(HttpClient httpClient, IOptions<GeminiOptions> 
         if (_options.UseMockProviders) return "[mock-gemini]";
         if (string.IsNullOrWhiteSpace(_options.ApiKey)) throw new InvalidOperationException("Gemini ApiKey is required when UseMockProviders=false.");
 
-        var url = $"{_options.BaseUrl.TrimEnd('/')}/v1beta/models/gemini-1.5-flash:generateContent?key={_options.ApiKey}";
+        var url = $"{_options.BaseUrl.TrimEnd('/')}/v1beta/models/{_options.Model}:generateContent?key={_options.ApiKey}";
         var body = JsonSerializer.Serialize(new { contents = new[] { new { parts = new[] { new { text = prompt } } } } });
         using var req = new HttpRequestMessage(HttpMethod.Post, url)
         {

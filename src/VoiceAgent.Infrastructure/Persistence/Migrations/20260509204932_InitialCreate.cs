@@ -190,6 +190,7 @@ namespace VoiceAgent.Infrastructure.Persistence.Migrations
                     RequiredSlotsJson = table.Column<string>(type: "jsonb", nullable: false),
                     OptionalSlotsJson = table.Column<string>(type: "jsonb", nullable: true),
                     AllowedToolsJson = table.Column<string>(type: "jsonb", nullable: false),
+                    QuestionnaireJson = table.Column<string>(type: "jsonb", nullable: true),
                     ValidationRulesJson = table.Column<string>(type: "text", nullable: true),
                     FallbackRulesJson = table.Column<string>(type: "text", nullable: true),
                     ConfirmationRulesJson = table.Column<string>(type: "text", nullable: true),

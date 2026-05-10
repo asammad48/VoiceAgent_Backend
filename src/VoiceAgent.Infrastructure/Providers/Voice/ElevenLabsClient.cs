@@ -14,7 +14,7 @@ public sealed class ElevenLabsClient(HttpClient httpClient, IOptions<ElevenLabsO
         if (_options.UseMockProviders) return Array.Empty<byte>();
         if (string.IsNullOrWhiteSpace(_options.ApiKey)) throw new InvalidOperationException("ElevenLabs ApiKey is required when UseMockProviders=false.");
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl.TrimEnd('/')}/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL/stream");
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl.TrimEnd('/')}/v1/text-to-speech/{_options.DefaultVoiceId}/stream");
         req.Headers.Add("xi-api-key", _options.ApiKey);
         req.Content = new StringContent(JsonSerializer.Serialize(new
         {
