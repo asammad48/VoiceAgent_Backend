@@ -4,6 +4,7 @@ public enum ConversationState
     Started, Greeting, ConsentDisclosure, IntentDetection,
     CollectingSlots, ValidatingSlots, ExecutingTool, ConfirmingAction,
     AwaitingConfirmation,   // all slots filled — summary read, waiting for yes/no
+    EditingSlot,           // bot asked for corrected value for a specific slot
     Closing,               // user confirmed — delivering goodbye
     SavingResult, ExternalDispatch, HumanHandoff,
     Completed,             // happy-path close

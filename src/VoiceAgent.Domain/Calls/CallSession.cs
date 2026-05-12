@@ -2,4 +2,5 @@ using VoiceAgent.Domain.Enums; namespace VoiceAgent.Domain.Entities; public clas
     public int AbuseWarningCount { get; set; }
     public string? EndReason { get; set; }
     public string? CurrentQuestionId { get; set; }
+    public string? EditingSlotId { get; set; }
 }

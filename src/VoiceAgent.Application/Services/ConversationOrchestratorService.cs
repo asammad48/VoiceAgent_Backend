@@ -90,6 +90,15 @@ public class ConversationOrchestratorService(
             return new SendDemoMessageResponseDto { Reply = confirmReply, CurrentState = session.CurrentState.ToString(), ShouldEndCall = shouldEnd, EndReason = endReason, MissingSlots = [] };
         }
 
+        // EditingSlot: bot asked for corrected value for a specific field
+        if (session.CurrentState == ConversationState.EditingSlot && !string.IsNullOrWhiteSpace(session.EditingSlotId))
+        {
+            var (editReply, editEnd, editReason) = await HandleSlotEditAsync(session, message, lower, campaign, config, ct);
+            db.CallTurns.Add(new CallTurn { Id = Guid.NewGuid(), CallSessionId = session.Id, TurnNumber = turnNumber + 1, Speaker = "bot", Text = editReply, StateAfter = session.CurrentState.ToString() });
+            await db.SaveChangesAsync(ct);
+            return new SendDemoMessageResponseDto { Reply = editReply, CurrentState = session.CurrentState.ToString(), ShouldEndCall = editEnd, EndReason = editReason, MissingSlots = [] };
+        }
+
         // Opt-out / not-interested intercept
         var optOutReply = TryHandleOptOut(session, lower, db);
         if (optOutReply is not null)
@@ -125,34 +134,324 @@ public class ConversationOrchestratorService(
     public Task<string> OrchestrateAsync(Guid callSessionId, string message, CancellationToken ct = default)
         => ProcessMessageAsync(callSessionId, message, ct).ContinueWith(t => t.Result.Reply, ct);
 
+    // ── Slot labels and keyword map (for confirmation edit flow) ─────────────
+
+    private static readonly Dictionary<string, string> SlotLabels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["firstName"]             = "first name",
+        ["customerName"]          = "name",
+        ["leadName"]              = "name",
+        ["patientName"]           = "name",
+        ["beneficiaryName"]       = "beneficiary name",
+        ["phone"]                 = "phone number",
+        ["callbackPhone"]         = "callback phone",
+        ["age"]                   = "age",
+        ["ageRange"]              = "age range",
+        ["state"]                 = "state",
+        ["householdSize"]         = "household size",
+        ["passengerCount"]        = "passenger count",
+        ["incomeRange"]           = "income range",
+        ["monthlyRevenueRange"]   = "monthly revenue",
+        ["coverageInterest"]      = "coverage interest",
+        ["coverageAmount"]        = "coverage amount",
+        ["currentCoverage"]       = "current coverage",
+        ["tobaccoUse"]            = "tobacco use",
+        ["healthConditions"]      = "health conditions",
+        ["currentInsuranceStatus"]= "insurance status",
+        ["interestConfirmed"]     = "interest",
+        ["callbackTime"]          = "callback time",
+        ["fulfillmentType"]       = "fulfillment type",
+        ["paymentMethod"]         = "payment method",
+        ["urgency"]               = "urgency",
+        ["packageType"]           = "package type",
+        ["weightKg"]              = "package weight (kg)",
+        ["vehicleType"]           = "vehicle type",
+        ["pickupLocation"]        = "pickup location",
+        ["dropoffLocation"]       = "dropoff location",
+        ["pickupAddress"]         = "pickup address",
+        ["dropoffAddress"]        = "dropoff address",
+        ["pickupDateTime"]        = "pickup time",
+        ["preferredDateTime"]     = "preferred date and time",
+        ["preferredDoctor"]       = "preferred doctor",
+        ["reasonForVisit"]        = "reason for visit",
+        ["branch"]                = "clinic location",
+        ["planType"]              = "plan type",
+    };
+
+    // ordered most-specific first so short keywords don't shadow longer ones
+    private static readonly (string Keyword, string SlotId)[] SlotKeywords =
+    [
+        ("beneficiary name", "beneficiaryName"),
+        ("beneficiary", "beneficiaryName"),
+        ("callback phone", "callbackPhone"),
+        ("callback time", "callbackTime"),
+        ("callback", "callbackTime"),
+        ("clinic location", "branch"),
+        ("clinic branch", "branch"),
+        ("clinic", "branch"),
+        ("branch", "branch"),
+        ("coverage amount", "coverageAmount"),
+        ("coverage interest", "coverageInterest"),
+        ("current coverage", "currentCoverage"),
+        ("coverage", "coverageInterest"),
+        ("dropoff address", "dropoffAddress"),
+        ("dropoff location", "dropoffLocation"),
+        ("dropoff", "dropoffLocation"),
+        ("fulfillment", "fulfillmentType"),
+        ("health condition", "healthConditions"),
+        ("health", "healthConditions"),
+        ("household size", "householdSize"),
+        ("household", "householdSize"),
+        ("income", "incomeRange"),
+        ("insurance status", "currentInsuranceStatus"),
+        ("current insurance", "currentInsuranceStatus"),
+        ("insurance", "currentInsuranceStatus"),
+        ("package weight", "weightKg"),
+        ("weight", "weightKg"),
+        ("passenger count", "passengerCount"),
+        ("passengers", "passengerCount"),
+        ("payment", "paymentMethod"),
+        ("phone number", "phone"),
+        ("phone", "phone"),
+        ("pickup address", "pickupAddress"),
+        ("pickup location", "pickupLocation"),
+        ("pickup time", "pickupDateTime"),
+        ("pickup", "pickupLocation"),
+        ("plan type", "planType"),
+        ("plan", "planType"),
+        ("preferred doctor", "preferredDoctor"),
+        ("preferred time", "preferredDateTime"),
+        ("reason for visit", "reasonForVisit"),
+        ("reason", "reasonForVisit"),
+        ("state", "state"),
+        ("tobacco", "tobaccoUse"),
+        ("vehicle type", "vehicleType"),
+        ("vehicle", "vehicleType"),
+        ("age range", "ageRange"),
+        ("age", "age"),
+        // name variants — each campaign uses one; TryParseFieldReference checks filledSlotIds
+        ("patient name", "patientName"),
+        ("customer name", "customerName"),
+        ("lead name", "leadName"),
+        ("my name", "firstName"),
+        ("name", "leadName"),
+        ("name", "customerName"),
+        ("name", "patientName"),
+        ("name", "firstName"),
+    ];
+
+    private static readonly HashSet<string> CorrectionIndicators = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "wrong", "incorrect", "mistake", "error", "not right", "not correct",
+        "actually", "no it's", "no it is", "i said", "i meant", "i mean",
+        "should be", "it should", "change", "update", "correct it", "fix"
+    };
+
     // ── Confirmation handler ──────────────────────────────────────────────────
 
     private (string Reply, bool ShouldEndCall, string? EndReason) HandleConfirmation(
         CallSession session, string lower, Campaign campaign, CampaignConfiguration? config)
     {
-        var yes = Regex.IsMatch(lower, @"\b(yes|yeah|yep|yup|sure|correct|confirm|absolutely|definitely|proceed|go ahead|ok|okay)\b");
-        var no  = Regex.IsMatch(lower, @"\b(no|nope|nah|cancel|nevermind|never mind|decline)\b");
+        var questionnaire = TryParseQuestionnaire(config?.QuestionnaireJson);
+        var slots = ParseSlots(session.CollectedSlotsJson);
+
+        // Priority 1: inline correction ("my age is 40", "actually my name is Sarah")
+        var inline = TryParseInlineCorrection(lower, slots, questionnaire);
+        if (inline is not null)
+        {
+            slots[inline.Value.SlotId] = inline.Value.Value;
+            session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+            var summary = BuildNumberedSummary(slots, questionnaire);
+            return ($"Got it! I've updated that. {summary} Does everything look correct now?", false, null);
+        }
+
+        // Priority 2: field reference only ("change my phone number", "the state is wrong")
+        var fieldRef = TryParseFieldReference(lower, slots, questionnaire);
+        if (fieldRef is not null)
+        {
+            session.EditingSlotId = fieldRef;
+            session.CurrentState = ConversationState.EditingSlot;
+            var label = SlotLabels.GetValueOrDefault(fieldRef, fieldRef);
+            return ($"Sure! What is the correct {label}?", false, null);
+        }
+
+        // Priority 3: yes — confirmed
+        var yes = Regex.IsMatch(lower, @"\b(yes|yeah|yep|yup|sure|correct|confirm|absolutely|definitely|proceed|go ahead|ok|okay|that'?s right|looks good|all good|perfect|great)\b");
+        var no  = Regex.IsMatch(lower, @"\b(no|nope|nah)\b");
 
         if (yes && !no)
         {
             session.CurrentState = ConversationState.Completed;
             session.EndReason = "completed_happy_path";
-            var q = TryParseQuestionnaire(config?.QuestionnaireJson);
-            var slots = ParseSlots(session.CollectedSlotsJson);
-            var closing = !string.IsNullOrWhiteSpace(q.ClosingScript)
-                ? q.ClosingScript
+            var closing = !string.IsNullOrWhiteSpace(questionnaire.ClosingScript)
+                ? questionnaire.ClosingScript
                 : BuildConfirmation(campaign.CampaignType, slots);
             return (closing, true, "completed_happy_path");
         }
 
+        // Priority 4: plain "no" without a specific field → ask what to change
         if (no && !yes)
         {
-            session.CurrentState = ConversationState.Declined;
-            session.EndReason = "user_declined_at_confirmation";
-            return ("No problem at all! Thank you for your time. Have a wonderful day!", true, "user_declined_at_confirmation");
+            var summary = BuildNumberedSummary(slots, questionnaire);
+            return ($"No problem! {summary} Which item would you like to change? You can say the number or the field name.", false, null);
         }
 
-        return ("I'm sorry, I didn't quite catch that. Could you please say yes to confirm or no to cancel?", false, null);
+        // Priority 5: ambiguous
+        return ("I'm sorry, I didn't quite catch that. Could you say yes to confirm, no to make a change, or tell me which detail to update?", false, null);
+    }
+
+    // ── EditingSlot handler ───────────────────────────────────────────────────
+
+    private async Task<(string Reply, bool ShouldEndCall, string? EndReason)> HandleSlotEditAsync(
+        CallSession session, string message, string lower,
+        Campaign campaign, CampaignConfiguration? config, CancellationToken ct)
+    {
+        var slotId = session.EditingSlotId!;
+        var questionnaire = TryParseQuestionnaire(config?.QuestionnaireJson);
+        var slots = ParseSlots(session.CollectedSlotsJson);
+
+        // Find the question for this slot to get validValues and question text
+        var qDef = questionnaire.Questions.FirstOrDefault(q => (q.SlotId ?? q.Id) == slotId);
+        var questionText = qDef?.Question ?? slotId;
+
+        // Extract new value — regex first, then LLM
+        var extracted = TryExtractValue(slotId, message, lower, qDef?.ValidValues);
+        if (extracted is null)
+            extracted = await slotExtractionService.ExtractAsync(slotId, questionText, message, ct);
+
+        if (extracted is null)
+        {
+            var label = SlotLabels.GetValueOrDefault(slotId, slotId);
+            return ($"I'm sorry, I didn't catch that. What is the correct {label}?", false, null);
+        }
+
+        // Disqualification check on new value
+        var dq = CheckCampaignDisqualificationOnExtract(campaign.CampaignType, slotId, extracted, session);
+        if (dq is not null)
+            return (dq, true, session.EndReason);
+
+        slots[slotId] = extracted;
+        session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+        session.EditingSlotId = null;
+        session.CurrentState = ConversationState.AwaitingConfirmation;
+
+        var summary = BuildNumberedSummary(slots, questionnaire);
+        return ($"Updated! {summary} Does everything look correct now?", false, null);
+    }
+
+    // ── Inline correction / field reference parsers ───────────────────────────
+
+    private static (string SlotId, string Value)? TryParseInlineCorrection(
+        string lower, Dictionary<string, string> slots, QuestionnaireDefinition questionnaire)
+    {
+        // Must contain a correction indicator to avoid false positives during normal Q&A
+        var hasIndicator = CorrectionIndicators.Any(ind => lower.Contains(ind));
+        if (!hasIndicator) return null;
+
+        var filledSlotIds = GetOrderedFilledSlots(slots, questionnaire);
+
+        foreach (var (keyword, slotId) in SlotKeywords)
+        {
+            if (!filledSlotIds.Contains(slotId)) continue;
+            if (!lower.Contains(keyword)) continue;
+
+            // Try to extract a value for this slot from the correction message
+            var extracted = TryExtractValue(slotId, lower, lower, null);
+            if (extracted is not null && !CorrectionIndicators.Contains(extracted))
+                return (slotId, extracted);
+        }
+
+        // Number-only inline corrections: "item 2 is 45" or "number 3, it's Texas"
+        var numMatch = Regex.Match(lower, @"\b(?:item\s*|number\s*)?(?<n>[1-9])\b");
+        if (numMatch.Success && int.TryParse(numMatch.Groups["n"].Value, out var idx))
+        {
+            var ordered = GetOrderedFilledSlots(slots, questionnaire);
+            if (idx <= ordered.Count)
+            {
+                var targetSlot = ordered[idx - 1];
+                var extracted = TryExtractValue(targetSlot, lower, lower, null);
+                if (extracted is not null && !CorrectionIndicators.Contains(extracted))
+                    return (targetSlot, extracted);
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryParseFieldReference(string lower, Dictionary<string, string> slots, QuestionnaireDefinition questionnaire)
+    {
+        var filledSlotIds = GetOrderedFilledSlots(slots, questionnaire);
+
+        // Number reference: "change number 2" or just "2"
+        var numMatch = Regex.Match(lower, @"\b(?:number\s*|item\s*|#\s*)?(?<n>[1-9])\b");
+        if (numMatch.Success && int.TryParse(numMatch.Groups["n"].Value, out var idx))
+        {
+            if (idx <= filledSlotIds.Count)
+                return filledSlotIds[idx - 1];
+        }
+
+        // Keyword reference
+        foreach (var (keyword, slotId) in SlotKeywords)
+        {
+            if (filledSlotIds.Contains(slotId) && lower.Contains(keyword))
+                return slotId;
+        }
+
+        return null;
+    }
+
+    // ── Numbered summary builder ──────────────────────────────────────────────
+
+    private static string BuildNumberedSummary(Dictionary<string, string> slots, QuestionnaireDefinition questionnaire)
+    {
+        var ordered = GetOrderedFilledSlots(slots, questionnaire);
+        if (ordered.Count == 0) return "I don't have any details recorded yet.";
+
+        var lines = ordered.Select((slotId, i) =>
+        {
+            var label = SlotLabels.GetValueOrDefault(slotId, slotId);
+            var value = FormatSlotValue(slotId, slots[slotId]);
+            return $"{i + 1}. {label}: {value}";
+        });
+
+        return "Here are the details I have: " + string.Join("; ", lines) + ".";
+    }
+
+    private static List<string> GetOrderedFilledSlots(Dictionary<string, string> slots, QuestionnaireDefinition questionnaire)
+    {
+        // items = cart JSON blob (not human-readable); planType = derived from branch, not collected directly
+        static bool IsDisplayable(string k) => k != "items" && k != "planType";
+
+        var ordered = questionnaire.Questions
+            .Select(q => q.SlotId ?? q.Id)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(k => slots.ContainsKey(k) && IsDisplayable(k))
+            .ToList();
+
+        var extras = slots.Keys
+            .Where(k => !ordered.Contains(k, StringComparer.OrdinalIgnoreCase) && IsDisplayable(k))
+            .OrderBy(k => k);
+
+        ordered.AddRange(extras);
+        return ordered;
+    }
+
+    private static string FormatSlotValue(string slotId, string value)
+    {
+        return slotId switch
+        {
+            "tobaccoUse" or "healthConditions" or "interestConfirmed" or "currentInsuranceStatus"
+                => value, // already "Yes"/"No"
+            "coverageAmount" => value.StartsWith('$') ? value : $"${value}",
+            "planType" => value switch
+            {
+                "simplified_issue" => "Simplified Issue",
+                "graded_standard"  => "Graded Standard",
+                "graded_benefit"   => "Graded Benefit",
+                _ => value
+            },
+            _ => value
+        };
     }
 
     // ── Abuse detection (3-strike) ────────────────────────────────────────────
@@ -313,61 +612,8 @@ public class ConversationOrchestratorService(
         var finalResult = BuildFinalResult(campaign.CampaignType, slots, session);
         session.FinalResultJson = JsonSerializer.Serialize(finalResult);
 
-        var summary = BuildSummaryText(campaign.CampaignType, slots);
+        var summary = BuildNumberedSummary(slots, questionnaire);
         return ($"{summary} Does everything look correct?", [], finalResult, false, null);
-    }
-
-    private static string BuildSummaryText(CampaignType type, Dictionary<string, string> slots)
-    {
-        var name = slots.GetValueOrDefault("firstName") ?? slots.GetValueOrDefault("customerName")
-                ?? slots.GetValueOrDefault("leadName") ?? slots.GetValueOrDefault("patientName") ?? "there";
-
-        return type switch
-        {
-            CampaignType.AcaSales =>
-                $"Great, {name}! To confirm: you're in {slots.GetValueOrDefault("state", "your state")}, " +
-                $"household size is {slots.GetValueOrDefault("householdSize", "unknown")}, " +
-                $"income range is {slots.GetValueOrDefault("incomeRange", "unknown")}, " +
-                $"and your callback preference is {slots.GetValueOrDefault("callbackTime", "flexible")}.",
-
-            CampaignType.MedicareSales =>
-                $"Thank you, {name}! To confirm: you're {slots.GetValueOrDefault("ageRange", "in the qualifying age range")}, " +
-                $"located in {slots.GetValueOrDefault("state", "your state")}, " +
-                $"and we'll call you back {slots.GetValueOrDefault("callbackTime", "soon")}.",
-
-            CampaignType.FeSales => BuildFeSummary(name, slots),
-
-            CampaignType.DoctorAppointment =>
-                $"To confirm: appointment for {name}, " +
-                $"reason: {slots.GetValueOrDefault("reasonForVisit", "not specified")}, " +
-                $"preferred time: {slots.GetValueOrDefault("preferredDateTime", "to be arranged")}, " +
-                $"doctor: {slots.GetValueOrDefault("preferredDoctor", "any available")}.",
-
-            CampaignType.CabBooking =>
-                $"To confirm: cab from {slots.GetValueOrDefault("pickupLocation", "pickup")} to " +
-                $"{slots.GetValueOrDefault("dropoffLocation", "destination")} " +
-                $"for {slots.GetValueOrDefault("passengerCount", "1")} passenger(s), " +
-                $"vehicle: {slots.GetValueOrDefault("vehicleType", "standard")}.",
-
-            _ => $"Just to summarise the details I have for you, {name}: " +
-                 string.Join(", ", slots.Select(kv => $"{kv.Key}: {kv.Value}")) + "."
-        };
-    }
-
-    private static string BuildFeSummary(string name, Dictionary<string, string> slots)
-    {
-        var planLabel = slots.GetValueOrDefault("planType") switch
-        {
-            "simplified_issue" => "a simplified-issue plan (no serious health conditions, best rates)",
-            "graded_standard"  => "a graded-benefit plan (tobacco use noted)",
-            "graded_benefit"   => "a graded-benefit plan (health conditions noted)",
-            _ => "a final expense plan"
-        };
-        return $"Thank you, {name}! To confirm: you're {slots.GetValueOrDefault("age", "in the qualifying age range")} years old, " +
-               $"located in {slots.GetValueOrDefault("state", "your state")}, " +
-               $"interested in {slots.GetValueOrDefault("coverageAmount", "a coverage amount")} in coverage, " +
-               $"qualifying for {planLabel}, " +
-               $"and your beneficiary is {slots.GetValueOrDefault("beneficiaryName", "on file")}.";
     }
 
     private static string? CheckCampaignDisqualification(CampaignType type, string slotId, string lower, CallSession session)
