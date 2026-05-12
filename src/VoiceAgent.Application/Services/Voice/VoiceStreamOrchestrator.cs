@@ -24,16 +24,25 @@ public class VoiceStreamOrchestrator(
     private static readonly ConcurrentDictionary<Guid, bool> BotSpeaking = new();
     private static readonly ConcurrentDictionary<Guid, AudioAccumulator> AudioAccumulators = new();
 
-    // Energy threshold (RMS out of 32767): below this is treated as silence.
-    // Typical speech RMS at normal mic gain is 800–4000; background noise is ~100–300.
-    private const double SpeechEnergyThreshold = 400.0;
+    // RMS threshold (out of 32767) separating speech from silence.
+    // Lower = more sensitive (catches quiet mics). Raise if background noise triggers false detections.
+    private const double SpeechEnergyThreshold = 250.0;
 
-    // How long silence must persist after speech before we transcribe.
-    private const double SilenceThresholdSeconds = 1.5;
+    // Minimum average RMS of accumulated PCM to even bother calling Deepgram.
+    // If the whole buffer is below this, it's empty/silent — skip the API call.
+    private const double MinAccumulatedRmsThreshold = 150.0;
+
+    // Silence required AFTER speech ends before we fire the Deepgram call.
+    // Short utterances (< 1.5s of speech) use the faster threshold.
+    private const double SilenceThresholdSeconds      = 0.8;   // normal
+    private const double SilenceThresholdShortSeconds = 0.5;   // for one-word answers
+
+    // Cap trailing silence added to the PCM buffer (keeps audio sent to Deepgram clean).
+    private const int MaxTrailingSilenceChunks = 3;   // ~0.75s
 
     // WAV header is always 44 bytes; PCM samples follow as little-endian Int16.
     private const int WavHeaderBytes = 44;
-    private const int SampleRate = 16000;
+    private const int SampleRate     = 16000;
 
     // ── Main entry point ──────────────────────────────────────────────────────
 
@@ -104,34 +113,51 @@ public class VoiceStreamOrchestrator(
                 if (isSpeech)
                 {
                     // Accumulate raw PCM (strip the 44-byte WAV header)
-                    var pcm = payload.Length > WavHeaderBytes
-                        ? payload.AsSpan(WavHeaderBytes).ToArray()
-                        : Array.Empty<byte>();
-                    acc.PcmBuffer.AddRange(pcm);
-                    acc.LastSpeechAt = DateTime.UtcNow;
-                    acc.HasSpeech    = true;
+                    if (payload.Length > WavHeaderBytes)
+                        acc.PcmBuffer.AddRange(payload.AsSpan(WavHeaderBytes).ToArray());
+                    acc.LastSpeechAt        = DateTime.UtcNow;
+                    acc.HasSpeech           = true;
+                    acc.TrailingSilenceCount = 0;   // reset on resumed speech
                     continue;
                 }
 
                 // Silent chunk — if no speech accumulated yet, nothing to do
                 if (!acc.HasSpeech) continue;
 
-                // Include silence in buffer (natural speech has brief mid-word pauses)
-                var silencePcm = payload.Length > WavHeaderBytes
-                    ? payload.AsSpan(WavHeaderBytes).ToArray()
-                    : Array.Empty<byte>();
-                acc.PcmBuffer.AddRange(silencePcm);
+                // Add trailing silence up to the cap (so Deepgram hears a clean end-of-word)
+                if (acc.TrailingSilenceCount < MaxTrailingSilenceChunks)
+                {
+                    if (payload.Length > WavHeaderBytes)
+                        acc.PcmBuffer.AddRange(payload.AsSpan(WavHeaderBytes).ToArray());
+                    acc.TrailingSilenceCount++;
+                }
 
+                // Adaptive silence threshold: short utterances fire faster
+                var speechSec = (acc.PcmBuffer.Count - acc.TrailingSilenceCount * (SampleRate / 4 * 2))
+                                / (double)(SampleRate * 2);
+                speechSec = Math.Max(0, speechSec);
+                var silenceNeeded  = speechSec < 1.5 ? SilenceThresholdShortSeconds : SilenceThresholdSeconds;
                 var silenceElapsed = (DateTime.UtcNow - acc.LastSpeechAt).TotalSeconds;
-                if (silenceElapsed < SilenceThresholdSeconds) continue;
+
+                if (silenceElapsed < silenceNeeded) continue;
 
                 // ── Speech turn complete ──────────────────────────────────────
                 var pcmData = acc.PcmBuffer.ToArray();
-                AudioAccumulators[callSessionId] = new AudioAccumulator();   // reset
+                AudioAccumulators[callSessionId] = new AudioAccumulator();   // reset immediately
 
                 var durationSec = pcmData.Length / (SampleRate * 2.0);
-                logger.LogInformation("[WS:{StreamType}] Session={Id} Speech end — {Dur:0.1}s accumulated, transcribing",
-                    streamType, callSessionId, durationSec);
+
+                // Guard: skip Deepgram if accumulated audio is silent (empty mic / no real speech)
+                var avgRms = ComputeRmsFromPcm(pcmData);
+                logger.LogInformation("[WS:{StreamType}] Session={Id} Speech end — {Dur:0.1}s pcm, avgRMS={Rms:0}, silence={Sil:0.2}s",
+                    streamType, callSessionId, durationSec, avgRms, silenceElapsed);
+
+                if (avgRms < MinAccumulatedRmsThreshold)
+                {
+                    logger.LogInformation("[WS:{StreamType}] Session={Id} Skipping Deepgram — audio too quiet (avgRMS={Rms:0} < {Min})",
+                        streamType, callSessionId, avgRms, MinAccumulatedRmsThreshold);
+                    continue;
+                }
 
                 // Wrap accumulated PCM in a single WAV and transcribe
                 var fullWav    = BuildWav(pcmData);
@@ -139,22 +165,29 @@ public class VoiceStreamOrchestrator(
                 await costTrackingService.TrackSttSecondsAsync(callSessionId, (int)Math.Ceiling(durationSec), ct);
 
                 logger.LogInformation("[WS:{StreamType}] Session={Id} STT: \"{Transcript}\"", streamType, callSessionId, transcript);
-                await AppendEventAsync(callSessionId, "stt_final", new { transcript, durationSec }, ct);
+                await AppendEventAsync(callSessionId, "stt_final", new { transcript, durationSec, avgRms }, ct);
 
                 if (string.IsNullOrWhiteSpace(transcript))
                 {
-                    logger.LogDebug("[WS:{StreamType}] Session={Id} Empty transcript — discarding", streamType, callSessionId);
+                    logger.LogInformation("[WS:{StreamType}] Session={Id} Empty transcript after {Dur:0.1}s — discarding",
+                        streamType, callSessionId, durationSec);
                     continue;
                 }
 
-                var reply = await orchestrator.OrchestrateAsync(callSessionId, transcript, ct);
-                logger.LogInformation("[WS:{StreamType}] Session={Id} LLM reply: \"{Reply}\"", streamType, callSessionId, reply);
+                var botTurn = await orchestrator.ProcessMessageAsync(callSessionId, transcript, ct);
+                logger.LogInformation("[WS:{StreamType}] Session={Id} Bot reply: \"{Reply}\" ShouldEndCall={End}", streamType, callSessionId, botTurn.Reply, botTurn.ShouldEndCall);
                 await costTrackingService.TrackLlmTokensAsync(
                     callSessionId,
                     Math.Max(1, transcript.Length / 4),
-                    Math.Max(1, reply.Length / 4), ct);
+                    Math.Max(1, botTurn.Reply.Length / 4), ct);
 
-                await SendBotTurnAsync(socket, callSessionId, reply, streamType, ct);
+                await SendBotTurnAsync(socket, callSessionId, botTurn.Reply, streamType, ct);
+
+                if (botTurn.ShouldEndCall)
+                {
+                    logger.LogInformation("[WS:{StreamType}] Session={Id} Ending call — reason={Reason}", streamType, callSessionId, botTurn.EndReason);
+                    break;
+                }
             }
         }
         catch (OperationCanceledException)
@@ -258,7 +291,7 @@ public class VoiceStreamOrchestrator(
 
     // ── Energy-based VAD ──────────────────────────────────────────────────────
 
-    /// <summary>Computes RMS of the PCM samples inside a WAV chunk.</summary>
+    /// <summary>Computes RMS of the PCM samples inside a WAV chunk (skips 44-byte header).</summary>
     private static double ComputeRms(byte[] wavChunk)
     {
         if (wavChunk.Length <= WavHeaderBytes) return 0;
@@ -268,6 +301,20 @@ public class VoiceStreamOrchestrator(
         for (int i = 0; i < sampleCount; i++)
         {
             short s = BitConverter.ToInt16(wavChunk, WavHeaderBytes + i * 2);
+            sum += (double)s * s;
+        }
+        return Math.Sqrt(sum / sampleCount);
+    }
+
+    /// <summary>Computes RMS of raw PCM bytes (no WAV header).</summary>
+    private static double ComputeRmsFromPcm(byte[] pcm)
+    {
+        if (pcm.Length < 2) return 0;
+        int sampleCount = pcm.Length / 2;
+        double sum = 0;
+        for (int i = 0; i < sampleCount; i++)
+        {
+            short s = BitConverter.ToInt16(pcm, i * 2);
             sum += (double)s * s;
         }
         return Math.Sqrt(sum / sampleCount);
@@ -329,5 +376,6 @@ public class VoiceStreamOrchestrator(
         public List<byte> PcmBuffer { get; } = new(SampleRate * 2 * 30); // pre-alloc ~30s
         public DateTime LastSpeechAt { get; set; } = DateTime.MinValue;
         public bool HasSpeech { get; set; }
+        public int TrailingSilenceCount { get; set; }
     }
 }

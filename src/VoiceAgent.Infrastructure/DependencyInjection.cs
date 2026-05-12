@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using VoiceAgent.Application.Abstractions;
+using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Application.Interfaces.Providers;
 using VoiceAgent.Application.Interfaces.Tools;
 using VoiceAgent.Infrastructure.Caching;
@@ -76,6 +77,11 @@ public static class DependencyInjection
         services.AddScoped<IAgentTool, ListDealsTool>();
         services.AddScoped<IAgentTool, RestaurantTotalTool>();
         services.AddScoped<IAgentTool, CourierQuoteTool>();
+
+        if (useMockProviders)
+            services.AddScoped<ISlotExtractionService, MockSlotExtractionService>();
+        else
+            services.AddScoped<ISlotExtractionService, GeminiSlotExtractionService>();
 
         services.AddScoped<DbSeeder>();
         return services;
