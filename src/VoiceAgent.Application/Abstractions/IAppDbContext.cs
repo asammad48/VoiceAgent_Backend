@@ -29,6 +29,10 @@ public interface IAppDbContext
     DbSet<OutboundCampaignRun> OutboundCampaignRuns { get; }
     DbSet<OutboundLead> OutboundLeads { get; }
     DbSet<CourierPricingProfile> CourierPricingProfiles { get; }
+    DbSet<CourierDistanceBand> CourierDistanceBands { get; }
+    DbSet<CourierWeightBand> CourierWeightBands { get; }
+    DbSet<CabBooking> CabBookings { get; }
+    DbSet<DoctorAppointment> DoctorAppointments { get; }
     DbSet<KnowledgeBase> KnowledgeBases { get; }
     DbSet<KnowledgeDocument> KnowledgeDocuments { get; }
     DbSet<KnowledgeChunk> KnowledgeChunks { get; }

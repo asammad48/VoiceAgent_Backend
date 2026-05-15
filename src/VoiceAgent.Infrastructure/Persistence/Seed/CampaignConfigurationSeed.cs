@@ -196,11 +196,12 @@ public static class CampaignConfigurationSeed
         {
             Id = Guid.Parse("20000000-0000-0000-0000-000000000101"),
             TenantId = SeedIds.Tenant, ClientId = SeedIds.RestaurantClient, CampaignId = SeedIds.RestaurantCampaign,
-            RequiredSlotsJson = """["customerName","phone","fulfillmentType","items","paymentMethod"]""",
-            AllowedToolsJson  = """["MenuCategorySearchTool","MenuItemSearchTool","DishInfoTool","ListDealsTool","CartUpdateTool","RestaurantTotalTool","SaveRestaurantOrderTool"]""",
-            QuestionnaireJson = RestaurantQuestionnaire,
-            HumanTransferJson = """{"enabled":false,"mode":"Disabled","fallbackWhenDisabled":"SaveAndClose"}""",
-            RagSettingsJson   = """{"enabled":true,"topK":4,"minScore":0.72,"allowedDocumentTypes":["FAQ","Policy","ServiceInfo"]}"""
+            RequiredSlotsJson   = """["customerName","phone","fulfillmentType","items","paymentMethod"]""",
+            AllowedToolsJson    = """["MenuCategorySearchTool","MenuItemSearchTool","DishInfoTool","ListDealsTool","CartUpdateTool","RestaurantTotalTool","SaveRestaurantOrderTool"]""",
+            QuestionnaireJson   = RestaurantQuestionnaire,
+            ValidationRulesJson = """{"deliveryFee":3.99,"taxRatePercent":0.0,"currency":"GBP","freeDeliveryThreshold":20.0}""",
+            HumanTransferJson   = """{"enabled":false,"mode":"Disabled","fallbackWhenDisabled":"SaveAndClose"}""",
+            RagSettingsJson     = """{"enabled":true,"topK":4,"minScore":0.72,"allowedDocumentTypes":["FAQ","Policy","ServiceInfo"]}"""
         },
         new()
         {

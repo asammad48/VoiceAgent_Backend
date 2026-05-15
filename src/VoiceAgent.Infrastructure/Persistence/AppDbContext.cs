@@ -33,6 +33,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<CourierZone> CourierZones => Set<CourierZone>();
     public DbSet<CourierQuote> CourierQuotes => Set<CourierQuote>();
     public DbSet<CourierOrder> CourierOrders => Set<CourierOrder>();
+    public DbSet<CabBooking> CabBookings => Set<CabBooking>();
+    public DbSet<DoctorAppointment> DoctorAppointments => Set<DoctorAppointment>();
     public DbSet<KnowledgeBase> KnowledgeBases => Set<KnowledgeBase>();
     public DbSet<KnowledgeDocument> KnowledgeDocuments => Set<KnowledgeDocument>();
     public DbSet<KnowledgeChunk> KnowledgeChunks => Set<KnowledgeChunk>();

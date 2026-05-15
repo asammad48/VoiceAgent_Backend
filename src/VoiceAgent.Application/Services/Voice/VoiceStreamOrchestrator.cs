@@ -9,6 +9,7 @@ using VoiceAgent.Application.Abstractions;
 using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Application.Interfaces.Voice;
 using VoiceAgent.Domain.Entities;
+using VoiceAgent.Domain.Enums;
 
 namespace VoiceAgent.Application.Services.Voice;
 
@@ -76,9 +77,22 @@ public class VoiceStreamOrchestrator(
                     if (envelope?.Type == "session" && Guid.TryParse(envelope.CallSessionId, out var parsed))
                     {
                         callSessionId = parsed;
-                        logger.LogInformation("[WS:{StreamType}] Session={Id} Session attached", streamType, callSessionId);
-                        await AppendEventAsync(callSessionId, "voice_stream_attached", new { streamType }, ct);
-                        await SendOpeningScriptAsync(socket, callSessionId, streamType, ct);
+                        var existingSession = await db.CallSessions.FirstOrDefaultAsync(s => s.Id == callSessionId, ct);
+
+                        // Detect reconnect: session already advanced past the opening states
+                        var isReconnect = existingSession is not null
+                            && existingSession.CurrentState is not (ConversationState.Started or ConversationState.Greeting);
+
+                        logger.LogInformation("[WS:{StreamType}] Session={Id} Session {Action} (state={State})",
+                            streamType, callSessionId, isReconnect ? "reconnected" : "attached",
+                            existingSession?.CurrentState);
+
+                        await AppendEventAsync(callSessionId, isReconnect ? "voice_stream_reconnected" : "voice_stream_attached", new { streamType }, ct);
+
+                        if (isReconnect)
+                            await SendResumePromptAsync(socket, callSessionId, existingSession!, streamType, ct);
+                        else
+                            await SendOpeningScriptAsync(socket, callSessionId, streamType, ct);
                     }
                     else
                     {
@@ -181,11 +195,17 @@ public class VoiceStreamOrchestrator(
                     Math.Max(1, transcript.Length / 4),
                     Math.Max(1, botTurn.Reply.Length / 4), ct);
 
-                await SendBotTurnAsync(socket, callSessionId, botTurn.Reply, streamType, ct);
+                var audioBytes = await SendBotTurnAsync(socket, callSessionId, botTurn.Reply, streamType, ct, isClosing: botTurn.ShouldEndCall);
 
                 if (botTurn.ShouldEndCall)
                 {
-                    logger.LogInformation("[WS:{StreamType}] Session={Id} Ending call — reason={Reason}", streamType, callSessionId, botTurn.EndReason);
+                    var delayMs = EstimatePlaybackDelayMs(audioBytes);
+                    logger.LogInformation("[WS:{StreamType}] Session={Id} Ending call — reason={Reason}; waiting {Delay}ms for TTS playback", streamType, callSessionId, botTurn.EndReason, delayMs);
+                    await Task.Delay(delayMs, ct);
+                    await SendCallEndedFrameAsync(socket, botTurn.EndReason, ct);
+                    // Grace window is short — playback delay above already covers the audio duration.
+                    var graceMs = streamType == "phone" ? 3_000 : 2_000;
+                    await WaitForClientCloseOrTimeoutAsync(socket, buffer, graceMs, streamType, callSessionId, ct);
                     break;
                 }
             }
@@ -241,39 +261,142 @@ public class VoiceStreamOrchestrator(
         }
     }
 
+    // ── Reconnect: replay last bot turn ──────────────────────────────────────
+
+    private async Task SendResumePromptAsync(WebSocket socket, Guid callSessionId, CallSession session, string streamType, CancellationToken ct)
+    {
+        try
+        {
+            // If the session already ended, immediately signal the client
+            if (session.CurrentState is ConversationState.Completed or ConversationState.Declined
+                or ConversationState.Disqualified or ConversationState.AbuseEnded)
+            {
+                logger.LogInformation("[WS:{StreamType}] Session={Id} Reconnect on ended session (state={State}) — sending call_ended",
+                    streamType, callSessionId, session.CurrentState);
+                await SendCallEndedFrameAsync(socket, session.EndReason, ct);
+                return;
+            }
+
+            // Re-speak the last bot message so the caller knows where they are
+            var lastBotTurn = await db.CallTurns
+                .Where(t => t.CallSessionId == callSessionId && t.Speaker == "bot")
+                .OrderByDescending(t => t.TurnNumber)
+                .FirstOrDefaultAsync(ct);
+
+            if (lastBotTurn is not null)
+            {
+                logger.LogInformation("[WS:{StreamType}] Session={Id} Reconnect — replaying last bot turn: \"{Text}\"",
+                    streamType, callSessionId, lastBotTurn.Text);
+                await SendBotTurnAsync(socket, callSessionId, lastBotTurn.Text, streamType, ct);
+            }
+            else
+            {
+                // No turns yet — fall back to opening script
+                await SendOpeningScriptAsync(socket, callSessionId, streamType, ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[WS:{StreamType}] Session={Id} Failed to send resume prompt", streamType, callSessionId);
+        }
+    }
+
+    // ── call_ended frame ──────────────────────────────────────────────────────
+
+    private static async Task SendCallEndedFrameAsync(WebSocket socket, string? reason, CancellationToken ct)
+    {
+        if (socket.State != WebSocketState.Open) return;
+        var frame = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { type = "call_ended", reason }));
+        await socket.SendAsync(frame, WebSocketMessageType.Text, true, ct);
+    }
+
+    // ── Grace-period wait for client close ────────────────────────────────────
+
+    private async Task WaitForClientCloseOrTimeoutAsync(
+        WebSocket socket, byte[] buffer, int timeoutMs, string streamType, Guid callSessionId, CancellationToken ct)
+    {
+        using var graceCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        graceCts.CancelAfter(timeoutMs);
+        try
+        {
+            while (socket.State == WebSocketState.Open)
+            {
+                var r = await socket.ReceiveAsync(buffer, graceCts.Token);
+                if (r.MessageType == WebSocketMessageType.Close)
+                {
+                    logger.LogInformation("[WS:{StreamType}] Session={Id} Client acknowledged call_ended and closed", streamType, callSessionId);
+                    break;
+                }
+                // Discard any trailing audio frames arriving during grace window
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogInformation("[WS:{StreamType}] Session={Id} Grace window ({Ms}ms) expired — forcing close", streamType, callSessionId, timeoutMs);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[WS:{StreamType}] Session={Id} Error during grace window", streamType, callSessionId);
+        }
+    }
+
     // ── Synthesise TTS and send with control frames ───────────────────────────
 
-    private async Task SendBotTurnAsync(WebSocket socket, Guid callSessionId, string text, string streamType, CancellationToken ct)
+    // Returns the number of audio bytes sent so the caller can estimate playback duration.
+    private async Task<int> SendBotTurnAsync(WebSocket socket, Guid callSessionId, string text, string streamType, CancellationToken ct, bool isClosing = false)
     {
         BotSpeaking[callSessionId] = true;
         // Discard any audio accumulated during bot speech
         AudioAccumulators[callSessionId] = new AudioAccumulator();
 
+        var audioBytes = 0;
         try
         {
-            await SendControlFrameAsync(socket, "bot_started", ct);
+            await SendControlFrameAsync(socket, "bot_started", isClosing, ct);
 
-            logger.LogInformation("[WS:{StreamType}] Session={Id} Synthesising TTS ({Chars} chars)", streamType, callSessionId, text.Length);
+            logger.LogInformation("[WS:{StreamType}] Session={Id} Synthesising TTS ({Chars} chars, isClosing={IsClosing})", streamType, callSessionId, text.Length, isClosing);
             var audio = await audioRouter.SynthesizeAsync(text, ct);
             await costTrackingService.TrackTtsCharsAsync(callSessionId, text.Length, ct);
 
-            logger.LogInformation("[WS:{StreamType}] Session={Id} Sending TTS audio ({Bytes} bytes)", streamType, callSessionId, audio.Length);
+            audioBytes = audio.Length;
+            logger.LogInformation("[WS:{StreamType}] Session={Id} Sending TTS audio ({Bytes} bytes)", streamType, callSessionId, audioBytes);
             await socket.SendAsync(audio, WebSocketMessageType.Binary, true, ct);
-            await AppendEventAsync(callSessionId, "tts_audio_sent", new { bytes = audio.Length }, ct);
+            await AppendEventAsync(callSessionId, "tts_audio_sent", new { bytes = audioBytes }, ct);
         }
         finally
         {
             BotSpeaking[callSessionId] = false;
-            await SendControlFrameAsync(socket, "bot_ended", ct);
+            await SendControlFrameAsync(socket, "bot_ended", isClosing, ct);
         }
+
+        return audioBytes;
+    }
+
+    // Estimates how long the client needs to finish playing the audio before we send call_ended.
+    // ElevenLabs default output is MP3 @ 128 kbps: durationMs ≈ bytes * 8 / 128_000 = bytes / 16.
+    // Falls back to a text-length estimate when audio bytes are unavailable (mock providers).
+    private static int EstimatePlaybackDelayMs(int audioBytes)
+    {
+        if (audioBytes > 100)
+        {
+            var durationMs = audioBytes / 16;          // MP3 @ 128 kbps
+            return Math.Clamp(durationMs + 800, 2_000, 20_000);
+        }
+        return 3_000;  // safe default for mock/stub providers that return no audio
     }
 
     // ── Control frame ─────────────────────────────────────────────────────────
 
-    private static async Task SendControlFrameAsync(WebSocket socket, string type, CancellationToken ct)
+    private static Task SendControlFrameAsync(WebSocket socket, string type, CancellationToken ct)
+        => SendControlFrameAsync(socket, type, false, ct);
+
+    private static async Task SendControlFrameAsync(WebSocket socket, string type, bool isClosing, CancellationToken ct)
     {
         if (socket.State != WebSocketState.Open) return;
-        var frame = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { type }));
+        var payload = isClosing
+            ? JsonSerializer.Serialize(new { type, isClosing = true })
+            : JsonSerializer.Serialize(new { type });
+        var frame = Encoding.UTF8.GetBytes(payload);
         await socket.SendAsync(frame, WebSocketMessageType.Text, true, ct);
     }
 

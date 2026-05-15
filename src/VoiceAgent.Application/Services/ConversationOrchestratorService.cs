@@ -17,7 +17,9 @@ public class ConversationOrchestratorService(
     IGeocodingProvider geocodingProvider,
     IRoutingProvider routingProvider,
     IRagRetrievalService ragRetrievalService,
-    ISlotExtractionService slotExtractionService) : IConversationOrchestratorService
+    ISlotExtractionService slotExtractionService,
+    IAnswerFinalizationService finalizationService,
+    ILocationNormalizationService locationNormalization) : IConversationOrchestratorService
 {
     // ── Entry points ──────────────────────────────────────────────────────────
 
@@ -84,7 +86,7 @@ public class ConversationOrchestratorService(
         // AwaitingConfirmation: user is responding to the summary yes/no
         if (session.CurrentState == ConversationState.AwaitingConfirmation)
         {
-            var (confirmReply, shouldEnd, endReason) = HandleConfirmation(session, lower, campaign, config);
+            var (confirmReply, shouldEnd, endReason) = await HandleConfirmationAsync(session, lower, campaign, config, ct);
             db.CallTurns.Add(new CallTurn { Id = Guid.NewGuid(), CallSessionId = session.Id, TurnNumber = turnNumber + 1, Speaker = "bot", Text = confirmReply, StateAfter = session.CurrentState.ToString() });
             await db.SaveChangesAsync(ct);
             return new SendDemoMessageResponseDto { Reply = confirmReply, CurrentState = session.CurrentState.ToString(), ShouldEndCall = shouldEnd, EndReason = endReason, MissingSlots = [] };
@@ -249,8 +251,8 @@ public class ConversationOrchestratorService(
 
     // ── Confirmation handler ──────────────────────────────────────────────────
 
-    private (string Reply, bool ShouldEndCall, string? EndReason) HandleConfirmation(
-        CallSession session, string lower, Campaign campaign, CampaignConfiguration? config)
+    private async Task<(string Reply, bool ShouldEndCall, string? EndReason)> HandleConfirmationAsync(
+        CallSession session, string lower, Campaign campaign, CampaignConfiguration? config, CancellationToken ct)
     {
         var questionnaire = TryParseQuestionnaire(config?.QuestionnaireJson);
         var slots = ParseSlots(session.CollectedSlotsJson);
@@ -283,6 +285,8 @@ public class ConversationOrchestratorService(
         {
             session.CurrentState = ConversationState.Completed;
             session.EndReason = "completed_happy_path";
+            // Save campaign-specific entities (courier, cab, doctor, restaurant)
+            await SaveCampaignEntityAsync(session, campaign, config, slots, ct);
             var closing = !string.IsNullOrWhiteSpace(questionnaire.ClosingScript)
                 ? questionnaire.ClosingScript
                 : BuildConfirmation(campaign.CampaignType, slots);
@@ -314,10 +318,10 @@ public class ConversationOrchestratorService(
         var qDef = questionnaire.Questions.FirstOrDefault(q => (q.SlotId ?? q.Id) == slotId);
         var questionText = qDef?.Question ?? slotId;
 
-        // Extract new value — regex first, then LLM
-        var extracted = TryExtractValue(slotId, message, lower, qDef?.ValidValues);
+        // Extract new value — regex first, then LLM (both carry type hint when available)
+        var extracted = TryExtractValue(slotId, message, lower, qDef?.ValidValues, qDef?.SlotType);
         if (extracted is null)
-            extracted = await slotExtractionService.ExtractAsync(slotId, questionText, message, ct);
+            extracted = await slotExtractionService.ExtractAsync(slotId, questionText, message, qDef?.SlotType, ct);
 
         if (extracted is null)
         {
@@ -419,8 +423,8 @@ public class ConversationOrchestratorService(
 
     private static List<string> GetOrderedFilledSlots(Dictionary<string, string> slots, QuestionnaireDefinition questionnaire)
     {
-        // items = cart JSON blob (not human-readable); planType = derived from branch, not collected directly
-        static bool IsDisplayable(string k) => k != "items" && k != "planType";
+        // items = cart blob; planType = derived; __ = internal flags (e.g. __finalized__)
+        static bool IsDisplayable(string k) => k != "items" && k != "planType" && !k.StartsWith("__");
 
         var ordered = questionnaire.Questions
             .Select(q => q.SlotId ?? q.Id)
@@ -528,15 +532,15 @@ public class ConversationOrchestratorService(
 
         // Navigated past the last question — build summary
         if (current is null)
-            return BuildSummaryAndAwaitConfirmation(session, campaign, slots, questionnaire);
+            return await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, questionnaire, ct);
 
         // Resolve actual slot key (slotId overrides question id for shared-slot questions like healthConditions variants)
         var slotKey = current.SlotId ?? current.Id;
 
-        // Extract: regex first, then LLM fallback
-        var extracted = TryExtractValue(slotKey, message, lower, current.ValidValues);
+        // Extract: regex first (with type hint), then LLM fallback (with same type hint)
+        var extracted = TryExtractValue(slotKey, message, lower, current.ValidValues, current.SlotType);
         if (extracted is null)
-            extracted = await slotExtractionService.ExtractAsync(slotKey, current.Question, message, ct);
+            extracted = await slotExtractionService.ExtractAsync(slotKey, current.Question, message, current.SlotType, ct);
 
         if (extracted is null)
         {
@@ -583,18 +587,36 @@ public class ConversationOrchestratorService(
             return ("Based on the information provided, it looks like you may not qualify for this program at this time. Thank you for your interest and have a great day!", [], null, true, session.EndReason);
         }
 
-        // Advance
+        // Advance — skip questions whose slots are already filled.
+        // This handles the finalization re-ask case: only the flagged question was
+        // removed; all downstream questions are still answered, so we jump straight
+        // to the summary rather than re-asking them.
         var nextId = branch?.NextQuestionId ?? current.NextQuestionId;
-        if (string.IsNullOrWhiteSpace(nextId))
-            return BuildSummaryAndAwaitConfirmation(session, campaign, slots, questionnaire);
+        while (true)
+        {
+            if (string.IsNullOrWhiteSpace(nextId))
+                return await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, questionnaire, ct);
 
-        var nextQ = questionnaire.Questions.FirstOrDefault(q => q.Id == nextId);
-        if (nextQ is null)
-            return BuildSummaryAndAwaitConfirmation(session, campaign, slots, questionnaire);
+            var nextQ = questionnaire.Questions.FirstOrDefault(q => q.Id == nextId);
+            if (nextQ is null)
+                return await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, questionnaire, ct);
 
-        session.CurrentQuestionId = nextQ.Id;
-        var missing = questionnaire.Questions.Where(q => q.Required && !slots.ContainsKey(q.Id)).Select(q => q.Id).ToList();
-        return (nextQ.Question, missing, null, false, null);
+            var nextSlotKey = nextQ.SlotId ?? nextQ.Id;
+            if (!slots.ContainsKey(nextSlotKey))
+            {
+                // This slot is not yet answered — ask the question normally
+                session.CurrentQuestionId = nextQ.Id;
+                var missing = questionnaire.Questions
+                    .Where(q => q.Required && !slots.ContainsKey(q.SlotId ?? q.Id))
+                    .Select(q => q.SlotId ?? q.Id)
+                    .ToList();
+                return (nextQ.Question, missing, null, false, null);
+            }
+
+            // Slot already answered — resolve its branch with the stored value and skip past it
+            var filledBranch = ResolveBranch(nextQ, slots[nextSlotKey]);
+            nextId = filledBranch?.NextQuestionId ?? nextQ.NextQuestionId;
+        }
     }
 
     private static QuestionBranch? ResolveBranch(QuestionDefinition q, string value)
@@ -603,17 +625,129 @@ public class ConversationOrchestratorService(
         return exact ?? q.Branches.FirstOrDefault(b => b.When == "*");
     }
 
-    private static (string Reply, List<string> MissingSlots, object? FinalResult, bool ShouldEndCall, string? EndReason)
-        BuildSummaryAndAwaitConfirmation(CallSession session, Campaign campaign, Dictionary<string, string> slots, QuestionnaireDefinition questionnaire)
+    private async Task<(string Reply, List<string> MissingSlots, object? FinalResult, bool ShouldEndCall, string? EndReason)>
+        BuildSummaryAndAwaitConfirmationAsync(
+            CallSession session, Campaign campaign, CampaignConfiguration? config,
+            Dictionary<string, string> slots, QuestionnaireDefinition questionnaire, CancellationToken ct)
     {
+        // ── LLM Finalization ──────────────────────────────────────────────────
+        // Run once after all slots collected. If the LLM detects an ambiguous or
+        // invalid answer (e.g. "On" stored as a date), remove it and re-ask.
+        if (!slots.ContainsKey("__finalized__") && questionnaire.Questions.Count > 0)
+        {
+            var answers = questionnaire.Questions
+                .Select(q =>
+                {
+                    var key = q.SlotId ?? q.Id;
+                    return slots.TryGetValue(key, out var ans) ? new SlotAnswer(key, q.Question, ans, q.SlotType) : null;
+                })
+                .OfType<SlotAnswer>()
+                .ToList();
+
+            if (answers.Count > 0)
+            {
+                var finalization = await finalizationService.FinalizeAnswersAsync(answers, ct);
+                if (!finalization.AllClear && finalization.AmbiguousSlotIds.Count > 0)
+                {
+                    var ambiguousSlotId = finalization.AmbiguousSlotIds[0];
+                    var ambiguousQ = questionnaire.Questions
+                        .FirstOrDefault(q => string.Equals(q.SlotId ?? q.Id, ambiguousSlotId, StringComparison.OrdinalIgnoreCase));
+
+                    if (ambiguousQ is not null)
+                    {
+                        slots.Remove(ambiguousSlotId);
+                        session.CurrentQuestionId = ambiguousQ.Id;
+                        session.CurrentState = ConversationState.CollectingSlots;
+                        session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+                        return ($"Just to confirm — {ambiguousQ.Question}", [], null, false, null);
+                    }
+                }
+            }
+
+            slots["__finalized__"] = "true";
+            session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+        }
+
         session.CurrentState = ConversationState.AwaitingConfirmation;
         session.CurrentQuestionId = null;
 
+        // Courier: proactive fare quote instead of generic numbered summary
+        if (campaign.CampaignType == CampaignType.CourierService)
+        {
+            var courierReply = await BuildCourierQuoteSummaryAsync(session, slots, ct);
+            var courierResult = BuildFinalResult(campaign.CampaignType, slots, session);
+            session.FinalResultJson = JsonSerializer.Serialize(courierResult);
+            return (courierReply, [], courierResult, false, null);
+        }
+
+        // Cab: proactive fare quote instead of generic numbered summary
+        if (campaign.CampaignType == CampaignType.CabBooking)
+        {
+            var cabReply = await BuildCabQuoteSummaryAsync(session, config, slots, ct);
+            var cabResult = BuildFinalResult(campaign.CampaignType, slots, session);
+            session.FinalResultJson = JsonSerializer.Serialize(cabResult);
+            return (cabReply, [], cabResult, false, null);
+        }
+
         var finalResult = BuildFinalResult(campaign.CampaignType, slots, session);
         session.FinalResultJson = JsonSerializer.Serialize(finalResult);
-
         var summary = BuildNumberedSummary(slots, questionnaire);
         return ($"{summary} Does everything look correct?", [], finalResult, false, null);
+    }
+
+    private async Task<string> BuildCourierQuoteSummaryAsync(CallSession session, Dictionary<string, string> slots, CancellationToken ct)
+    {
+        var profile = await db.CourierPricingProfiles
+            .FirstOrDefaultAsync(x => x.TenantId == session.TenantId && x.ClientId == session.ClientId && x.IsActive, ct);
+        if (profile is null)
+            return "Your courier booking details are ready. Shall I go ahead and confirm the booking?";
+
+        decimal distKm;
+        if (!slots.TryGetValue("distanceKm", out var storedDist) || !decimal.TryParse(storedDist, out distKm))
+        {
+            distKm = await ResolveDistanceKmAsync(slots.GetValueOrDefault("pickupAddress"), slots.GetValueOrDefault("dropoffAddress"), ct) ?? 8m;
+            slots["distanceKm"] = distKm.ToString("F1");
+        }
+
+        decimal.TryParse(slots.GetValueOrDefault("weightKg", "0"), out var weight);
+        var packageType = slots.GetValueOrDefault("packageType", "standard");
+        var urgency     = slots.GetValueOrDefault("urgency", "standard");
+
+        var fare = await CalculateCourierFareAsync(profile, distKm, weight, packageType, urgency, ct);
+        slots["estimatedFare"]     = fare.ToString("F2");
+        slots["estimatedCurrency"] = profile.Currency;
+
+        var pickup  = slots.GetValueOrDefault("pickupAddress", "pickup");
+        var dropoff = slots.GetValueOrDefault("dropoffAddress", "destination");
+
+        return $"That's approximately {distKm:F1} km. Estimated cost for a {weight:F1} kg {packageType} package from {pickup} to {dropoff}: {profile.Currency}{fare:F2}. Shall I go ahead and confirm the booking?";
+    }
+
+    private async Task<string> BuildCabQuoteSummaryAsync(CallSession session, CampaignConfiguration? config, Dictionary<string, string> slots, CancellationToken ct)
+    {
+        var settings = ParseCabFareSettings(config?.ValidationRulesJson);
+
+        decimal distKm;
+        if (!slots.TryGetValue("distanceKm", out var storedDist) || !decimal.TryParse(storedDist, out distKm))
+        {
+            distKm = await ResolveDistanceKmAsync(slots.GetValueOrDefault("pickupLocation"), slots.GetValueOrDefault("dropoffLocation"), ct) ?? 5m;
+            slots["distanceKm"] = distKm.ToString("F1");
+        }
+
+        var pickup         = slots.GetValueOrDefault("pickupLocation", "pickup");
+        var dropoff        = slots.GetValueOrDefault("dropoffLocation", "destination");
+        var pickupDateTime = slots.GetValueOrDefault("pickupDateTime", "");
+        var isAirport      = IsAirportAddress(pickup) || IsAirportAddress(dropoff);
+        var isNight        = IsNightTime(pickupDateTime);
+
+        var fare = CalculateCabFare(settings, distKm, pickupDateTime, isAirport);
+        slots["estimatedFare"]     = fare.ToString("F2");
+        slots["estimatedCurrency"] = "GBP";
+
+        var vehicleType = slots.GetValueOrDefault("vehicleType", "Standard");
+        var surchargeNote = isAirport ? " (includes airport fee)" : (isNight ? " (includes night surcharge)" : "");
+
+        return $"Your {vehicleType} from {pickup} to {dropoff} is approximately {distKm:F1} km. Estimated fare: £{fare:F2}{surchargeNote}. Shall I confirm your booking?";
     }
 
     private static string? CheckCampaignDisqualification(CampaignType type, string slotId, string lower, CallSession session)
@@ -646,7 +780,7 @@ public class ConversationOrchestratorService(
         "tobaccoUse" or "healthConditions" or "interestConfirmed" or
         "fulfillmentType" or "paymentMethod" or "urgency" or "packageType" or "vehicleType";
 
-    private static string? TryExtractValue(string slotId, string message, string lower, List<string>? validValues)
+    private static string? TryExtractValue(string slotId, string message, string lower, List<string>? validValues, string? slotType = null)
     {
         return slotId switch
         {
@@ -710,8 +844,48 @@ public class ConversationOrchestratorService(
             "incomeRange" or "monthlyRevenueRange"
                 => ExtractIncomeRange(message, lower),
 
-            _ => IsMeaningfulResponse(lower) ? message.Trim() : null
+            // Date/time slots require an actual recognisable date or time pattern
+            "pickupDateTime" or "preferredDateTime" or "DateTime"
+                => ExtractDateTimeValue(message, lower),
+
+            _ => ExtractBySlotType(slotType, message, lower)
         };
+    }
+
+    // Falls through from TryExtractValue when no slot-specific handler matches.
+    // Applies type-constraint validation instead of blindly accepting any non-empty string.
+    private static string? ExtractBySlotType(string? slotType, string message, string lower) =>
+        slotType switch
+        {
+            "date" or "datetime" => ExtractDateTimeValue(message, lower),
+            "number"             => ExtractNumber(lower),
+            _                    => IsMeaningfulResponse(lower) ? message.Trim() : null
+        };
+
+    // Validates that a date/time slot contains an actual date/time expression.
+    // Rejects bare prepositions like "On" or "At" that the LLM occasionally returns.
+    private static string? ExtractDateTimeValue(string message, string lower)
+    {
+        // Relative dates
+        if (Regex.IsMatch(lower, @"\b(today|tomorrow|tonight|yesterday)\b")) return message.Trim();
+        // "next/this <day-or-period>"
+        if (Regex.IsMatch(lower, @"\b(next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|weekend|month)\b")) return message.Trim();
+        // Standalone day of week
+        if (Regex.IsMatch(lower, @"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")) return message.Trim();
+        // Month name present
+        if (Regex.IsMatch(lower, @"\b(january|february|march|april|may|june|july|august|september|october|november|december)\b")) return message.Trim();
+        // Ordinal day number (1st, 2nd, 3rd, 15th)
+        if (Regex.IsMatch(lower, @"\b\d{1,2}(st|nd|rd|th)\b")) return message.Trim();
+        // Numeric date (3/15, 15/3, 2024-03-15)
+        if (Regex.IsMatch(lower, @"\b\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\b")) return message.Trim();
+        // Explicit time with am/pm
+        if (Regex.IsMatch(lower, @"\b\d{1,2}(?::\d{2})?\s*(am|pm)\b")) return message.Trim();
+        // 24-hour time (HH:MM)
+        if (Regex.IsMatch(lower, @"\b\d{1,2}:\d{2}\b")) return message.Trim();
+        // Named time-of-day periods
+        if (Regex.IsMatch(lower, @"\b(morning|afternoon|evening|night|midnight|noon|midday)\b")) return message.Trim();
+        // Bare prepositions ("on", "at", "in") or other non-date words → reject
+        return null;
     }
 
     // ── Extraction helpers ────────────────────────────────────────────────────
@@ -852,17 +1026,18 @@ public class ConversationOrchestratorService(
     {
         return campaign.CampaignType switch
         {
-            CampaignType.RestaurantOrder   => await HandleRestaurantExtrasAsync(session, lower, message, slots, ct),
+            CampaignType.RestaurantOrder   => await HandleRestaurantExtrasAsync(session, config, lower, message, slots, ct),
             CampaignType.CourierService    => await HandleCourierExtrasAsync(session, config, lower, slots, ct),
-            CampaignType.CabBooking        => HandleCabExtras(lower, slots),
+            CampaignType.CabBooking        => await HandleCabExtrasAsync(session, lower, slots),
             CampaignType.DoctorAppointment => HandleDoctorExtras(lower, message, slots, session, config),
             _ => null
         };
     }
 
     private async Task<(string Reply, List<string> MissingSlots, object? FinalResult)?> HandleRestaurantExtrasAsync(
-        CallSession session, string lower, string original, Dictionary<string, string> slots, CancellationToken ct)
+        CallSession session, CampaignConfiguration? config, string lower, string original, Dictionary<string, string> slots, CancellationToken ct)
     {
+        var settings = ParseRestaurantSettings(config?.ValidationRulesJson);
         var menuItems = await db.MenuItems
             .Where(x => x.TenantId == session.TenantId && x.ClientId == session.ClientId && x.IsActive && x.IsAvailable)
             .ToListAsync(ct);
@@ -932,12 +1107,16 @@ public class ConversationOrchestratorService(
 
         if (lower.Contains("total") || lower.Contains("how much"))
         {
-            var cart = ParseCart(slots.GetValueOrDefault("items"));
-            var fee  = slots.GetValueOrDefault("fulfillmentType") == "delivery" ? 3.99m : 0m;
-            var tot  = cart.Sum(x => x.LineTotal) + fee;
+            var cart     = ParseCart(slots.GetValueOrDefault("items"));
+            var subtotal = cart.Sum(x => x.LineTotal);
+            var fee      = slots.GetValueOrDefault("fulfillmentType") == "delivery"
+                ? (settings.FreeDeliveryThreshold > 0 && subtotal >= settings.FreeDeliveryThreshold ? 0m : settings.DeliveryFee)
+                : 0m;
+            var tax = subtotal * (settings.TaxRatePercent / 100m);
+            var tot = subtotal + fee + tax;
             return cart.Count == 0
                 ? ("Your cart is empty. What would you like to order?", [], null)
-                : ($"Your current total is {tot:0.##} (including {fee:0.##} delivery fee).", [], null);
+                : ($"Your current total is {tot:0.##} {settings.Currency} (subtotal {subtotal:0.##}, delivery {fee:0.##}, tax {tax:0.##}).", [], null);
         }
 
         if (lower.Contains("confirm") || lower.Contains("place the order") || lower.Contains("that's all"))
@@ -946,28 +1125,36 @@ public class ConversationOrchestratorService(
             if (cart.Count == 0) return ("Your cart is empty. Please add some items first.", [], null);
 
             var subtotal = cart.Sum(x => x.LineTotal);
-            var fee      = slots.GetValueOrDefault("fulfillmentType") == "delivery" ? 3.99m : 0m;
-            var total    = subtotal + fee;
+            var fee      = slots.GetValueOrDefault("fulfillmentType") == "delivery"
+                ? (settings.FreeDeliveryThreshold > 0 && subtotal >= settings.FreeDeliveryThreshold ? 0m : settings.DeliveryFee)
+                : 0m;
+            var tax      = subtotal * (settings.TaxRatePercent / 100m);
+            decimal.TryParse(slots.GetValueOrDefault("discount", "0"), out var discount);
+            var total    = subtotal + fee + tax - discount;
             var currency = cart.First().Currency;
 
             var order = new RestaurantOrder
             {
                 Id = Guid.NewGuid(), TenantId = session.TenantId, ClientId = session.ClientId,
                 CampaignId = session.CampaignId, CallSessionId = session.Id,
+                CustomerName    = slots.GetValueOrDefault("customerName", ""),
+                Phone           = slots.GetValueOrDefault("phone", ""),
                 FulfillmentType = slots.GetValueOrDefault("fulfillmentType") ?? "pickup",
                 ItemsJson = JsonSerializer.Serialize(cart),
-                Subtotal = subtotal, DeliveryFee = fee, Total = total, Currency = currency, Status = "Confirmed"
+                Subtotal = subtotal, DeliveryFee = fee, Tax = tax, Discount = discount,
+                Total = total, Currency = currency, Status = "Confirmed"
             };
             db.RestaurantOrders.Add(order);
 
             var final = new
             {
                 type = "restaurant_order", orderId = order.Id,
-                subtotal, deliveryFee = fee, total, currency,
+                subtotal, deliveryFee = fee, tax, discount, total, currency,
                 payment = slots.GetValueOrDefault("paymentMethod") ?? "unknown"
             };
             session.FinalResultJson = JsonSerializer.Serialize(final);
-            return ($"Order confirmed! Your total is {total:0.##} {currency}. Thank you, {slots.GetValueOrDefault("customerName", "there")}!", [], final);
+            var cartLines = string.Join(", ", cart.Select(i => $"{i.Quantity}× {i.Name} {i.LineTotal:0.##} {currency}"));
+            return ($"Order confirmed! {cartLines}. Total: {total:0.##} {currency}. Thank you, {slots.GetValueOrDefault("customerName", "there")}!", [], final);
         }
 
         return null;
@@ -976,16 +1163,27 @@ public class ConversationOrchestratorService(
     private async Task<(string Reply, List<string> MissingSlots, object? FinalResult)?> HandleCourierExtrasAsync(
         CallSession session, CampaignConfiguration? config, string lower, Dictionary<string, string> slots, CancellationToken ct)
     {
-        if (lower.Contains("confirm") && slots.ContainsKey("pickupAddress") && slots.ContainsKey("dropoffAddress") && slots.ContainsKey("weightKg"))
-        {
-            decimal.TryParse(slots.GetValueOrDefault("weightKg", "0"), out var weight);
-            var profile = await db.CourierPricingProfiles.FirstOrDefaultAsync(x => x.TenantId == session.TenantId && x.ClientId == session.ClientId && x.IsActive, ct);
-            if (profile is null) return ("I couldn't load pricing at this time. Please try again shortly.", [], null);
+        var hasAddresses = slots.ContainsKey("pickupAddress") && slots.ContainsKey("dropoffAddress");
+        var hasWeight    = slots.ContainsKey("weightKg");
+        var hasEstimate  = slots.ContainsKey("estimatedFare");
 
-            var distKm = await ResolveDistanceKmAsync(slots.GetValueOrDefault("pickupAddress"), slots.GetValueOrDefault("dropoffAddress"), ct) ?? 8m;
-            var urgencyFee = slots.GetValueOrDefault("urgency") == "same_day" ? 5m : 0m;
-            var fragileFee = slots.GetValueOrDefault("packageType") == "fragile" ? 2m : 0m;
-            var total = Math.Max(profile.MinimumFee, profile.BaseFee + profile.PricePerKm * distKm + profile.PricePerKg * weight + urgencyFee + fragileFee);
+        // Early confirm shortcut — triggered before questionnaire completes (user says "confirm" mid-flow)
+        var isAffirmation = lower.Contains("confirm") || Regex.IsMatch(lower, @"\b(yes|yeah|yep|yup|go ahead|book it|proceed)\b");
+        if (isAffirmation && hasAddresses && hasWeight && hasEstimate)
+        {
+            var profile = await db.CourierPricingProfiles
+                .FirstOrDefaultAsync(x => x.TenantId == session.TenantId && x.ClientId == session.ClientId && x.IsActive, ct);
+            if (profile is null) return ("I couldn't load pricing. Please try again shortly.", [], null);
+
+            decimal.TryParse(slots.GetValueOrDefault("distanceKm", "0"), out var storedDist);
+            var distKm = storedDist > 0 ? storedDist
+                : (await ResolveDistanceKmAsync(slots.GetValueOrDefault("pickupAddress"), slots.GetValueOrDefault("dropoffAddress"), ct) ?? 8m);
+
+            decimal.TryParse(slots.GetValueOrDefault("weightKg", "0"), out var weight);
+            var packageType = slots.GetValueOrDefault("packageType", "standard");
+            var urgency     = slots.GetValueOrDefault("urgency", "standard");
+
+            var total = await CalculateCourierFareAsync(profile, distKm, weight, packageType, urgency, ct);
 
             var quote = new CourierQuote
             {
@@ -993,37 +1191,51 @@ public class ConversationOrchestratorService(
                 CampaignId = session.CampaignId, CallSessionId = session.Id,
                 PickupAddressJson  = JsonSerializer.Serialize(new { address = slots.GetValueOrDefault("pickupAddress") }),
                 DropoffAddressJson = JsonSerializer.Serialize(new { address = slots.GetValueOrDefault("dropoffAddress") }),
-                DistanceKm = distKm, WeightKg = weight,
-                PackageType = slots.GetValueOrDefault("packageType") ?? "standard",
-                Urgency = slots.GetValueOrDefault("urgency") ?? "standard",
-                EstimatedDeliveryTime = DateTime.UtcNow.AddHours(slots.GetValueOrDefault("urgency") == "same_day" ? 2 : 24),
+                DistanceKm = distKm, WeightKg = weight, PackageType = packageType, Urgency = urgency,
+                EstimatedDeliveryTime = DateTime.UtcNow.AddHours(urgency == "same_day" ? 2 : 24),
                 BaseFee = profile.BaseFee, DistanceFee = profile.PricePerKm * distKm,
-                WeightFee = profile.PricePerKg * weight, UrgencyFee = urgencyFee + fragileFee,
+                WeightFee = profile.PricePerKg * weight, UrgencyFee = 0m,
                 Total = total, Currency = profile.Currency, Status = "Quoted"
             };
             db.CourierQuotes.Add(quote);
 
+            var order = new CourierOrder
+            {
+                Id = Guid.NewGuid(), TenantId = session.TenantId, ClientId = session.ClientId,
+                CampaignId = session.CampaignId, CallSessionId = session.Id, CourierQuoteId = quote.Id,
+                CustomerName = slots.GetValueOrDefault("customerName", ""),
+                Phone        = slots.GetValueOrDefault("phone", ""),
+                FinalResultJson = "", Status = "Confirmed"
+            };
+            db.CourierOrders.Add(order);
+
             var final = new
             {
-                type = "courier_order", quoteId = quote.Id,
+                type = "courier_order", quoteId = quote.Id, orderId = order.Id,
                 pickup = slots.GetValueOrDefault("pickupAddress"), dropoff = slots.GetValueOrDefault("dropoffAddress"),
                 weightKg = weight, distanceKm = distKm, total, currency = profile.Currency
             };
             session.FinalResultJson = JsonSerializer.Serialize(final);
-            return ($"Confirmed! Your courier from {slots.GetValueOrDefault("pickupAddress")} to {slots.GetValueOrDefault("dropoffAddress")} is estimated at {total:0.##} {profile.Currency}. We'll be in touch, {slots.GetValueOrDefault("customerName", "there")}!", [], final);
+            var name = slots.GetValueOrDefault("customerName", "there");
+            return ($"Confirmed! Your courier from {slots.GetValueOrDefault("pickupAddress")} to {slots.GetValueOrDefault("dropoffAddress")} is estimated at {profile.Currency}{total:F2}. We'll be in touch, {name}!", [], final);
         }
+
         return null;
     }
 
-    private static (string Reply, List<string> MissingSlots, object? FinalResult)? HandleCabExtras(string lower, Dictionary<string, string> slots)
+    private static Task<(string Reply, List<string> MissingSlots, object? FinalResult)?> HandleCabExtrasAsync(
+        CallSession session, string lower, Dictionary<string, string> slots)
     {
         if (lower.Contains("helicopter"))
-            return ("We don't offer that vehicle type. Available options are Standard, Executive, 6-Seater, and Wheelchair Accessible.", [], null);
+            return Task.FromResult<(string, List<string>, object?)?>(("We don't offer helicopter transport. Available options are Standard, Executive, 6-Seater, and Wheelchair Accessible.", [], null));
         if (slots.TryGetValue("passengerCount", out var pcStr) && int.TryParse(pcStr, out var pc) && pc > 10)
-            return ("That's more passengers than a single vehicle holds. Would you like me to arrange multiple vehicles?", [], null);
+            return Task.FromResult<(string, List<string>, object?)?>(("That's more passengers than a single vehicle holds. Would you like me to arrange multiple vehicles?", [], null));
         if (lower.Contains("speak to someone") || lower.Contains("human") || lower.Contains("agent"))
-            return ("I can connect you to the team. I've marked this call for handoff.", [], null);
-        return null;
+        {
+            session.HandoffRequested = true;
+            return Task.FromResult<(string, List<string>, object?)?>(("I can connect you to the team. I've marked this call for handoff.", [], null));
+        }
+        return Task.FromResult<(string, List<string>, object?)?>( null);
     }
 
     private static (string Reply, List<string> MissingSlots, object? FinalResult)? HandleDoctorExtras(
@@ -1127,14 +1339,17 @@ public class ConversationOrchestratorService(
             {
                 type = "doctor_appointment", patientName = slots.GetValueOrDefault("patientName"), phone = slots.GetValueOrDefault("phone"),
                 reasonForVisit = slots.GetValueOrDefault("reasonForVisit"), preferredDateTime = slots.GetValueOrDefault("preferredDateTime"),
-                preferredDoctor = slots.GetValueOrDefault("preferredDoctor"), branch = slots.GetValueOrDefault("branch"), status = "CapturedOnly"
+                preferredDoctor = slots.GetValueOrDefault("preferredDoctor"), branch = slots.GetValueOrDefault("branch"),
+                appointmentId = (string?)null, status = "CapturedOnly"
             },
             CampaignType.CabBooking => new
             {
                 type = "cab_booking", customerName = slots.GetValueOrDefault("customerName"), phone = slots.GetValueOrDefault("phone"),
                 pickupLocation = slots.GetValueOrDefault("pickupLocation"), dropoffLocation = slots.GetValueOrDefault("dropoffLocation"),
                 pickupDateTime = slots.GetValueOrDefault("pickupDateTime"), passengerCount = slots.GetValueOrDefault("passengerCount"),
-                vehicleType = slots.GetValueOrDefault("vehicleType"), estimatedFare = "£18.00", status = "CapturedOnly"
+                vehicleType = slots.GetValueOrDefault("vehicleType"),
+                estimatedFare = slots.TryGetValue("estimatedFare", out var ef) ? $"£{ef}" : "TBC",
+                distanceKm = slots.GetValueOrDefault("distanceKm", ""), currency = "GBP", status = "CapturedOnly"
             },
             _ => new { type = "lead", slots, status = "CapturedOnly" }
         };
@@ -1279,10 +1494,264 @@ public class ConversationOrchestratorService(
     private async Task<decimal?> ResolveDistanceKmAsync(string? pickup, string? dropoff, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(pickup) || string.IsNullOrWhiteSpace(dropoff)) return null;
-        var from = await geocodingProvider.GeocodeAsync(pickup, ct);
-        var to   = await geocodingProvider.GeocodeAsync(dropoff, ct);
+
+        // Convert messy speech → clean geocoding candidates (one LLM call).
+        // Nominatim never receives raw spoken text; it only ever sees the LLM output.
+        var (normalizedPickup, normalizedDropoff) = await locationNormalization.NormalizeLocationsAsync(pickup, dropoff, ct);
+
+        var from = await geocodingProvider.GeocodeAsync(normalizedPickup, ct);
+        var to   = await geocodingProvider.GeocodeAsync(normalizedDropoff, ct);
         if (from is null || to is null) return null;
         return await routingProvider.GetDistanceKmAsync(from.Value, to.Value, ct);
+    }
+
+    // ─�� Courier fare calculator (band pricing) ────────────────────────────────
+
+    private async Task<decimal> CalculateCourierFareAsync(
+        CourierPricingProfile profile, decimal distanceKm, decimal weightKg,
+        string packageType, string urgency, CancellationToken ct)
+    {
+        var distBand = await db.CourierDistanceBands
+            .Where(b => b.CourierPricingProfileId == profile.Id && b.FromKm <= distanceKm && b.ToKm > distanceKm)
+            .OrderBy(b => b.FromKm).FirstOrDefaultAsync(ct);
+        var distFee = distBand is not null ? distBand.Fee : profile.PricePerKm * distanceKm;
+
+        var weightBand = await db.CourierWeightBands
+            .Where(b => b.CourierPricingProfileId == profile.Id && b.FromKg <= weightKg && b.ToKg > weightKg)
+            .OrderBy(b => b.FromKg).FirstOrDefaultAsync(ct);
+        var weightFee = weightBand is not null ? weightBand.Fee : profile.PricePerKg * weightKg;
+
+        var subtotal = profile.BaseFee + distFee + weightFee;
+
+        if (!string.IsNullOrWhiteSpace(profile.SettingsJson))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(profile.SettingsJson);
+                var root = doc.RootElement;
+                if (urgency == "same_day" && root.TryGetProperty("urgentMultiplier", out var multEl))
+                    subtotal *= multEl.GetDecimal();
+                if (packageType == "fragile" && root.TryGetProperty("fragilePackageExtraFee", out var fragEl))
+                    subtotal += fragEl.GetDecimal();
+            }
+            catch { }
+        }
+
+        return Math.Max(profile.MinimumFee, subtotal);
+    }
+
+    // ── Cab fare calculator ───────────────────────────────────────────────────
+
+    private static decimal CalculateCabFare(CabFareSettings settings, decimal distanceKm, string pickupDateTime, bool isAirportRide)
+    {
+        var fare = settings.BaseFare + settings.PricePerKm * distanceKm;
+        if (isAirportRide) fare += settings.AirportPickupFee;
+        if (IsNightTime(pickupDateTime)) fare *= settings.NightChargeMultiplier;
+        return Math.Max(settings.MinimumFare, fare);
+    }
+
+    private static bool IsNightTime(string dateTimeStr)
+    {
+        if (string.IsNullOrWhiteSpace(dateTimeStr)) return false;
+        var ampm = Regex.Match(dateTimeStr, @"\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b", RegexOptions.IgnoreCase);
+        if (ampm.Success)
+        {
+            var h = int.Parse(ampm.Groups[1].Value);
+            var pm = ampm.Groups[2].Value.Equals("pm", StringComparison.OrdinalIgnoreCase);
+            if (pm && h != 12) h += 12;
+            else if (!pm && h == 12) h = 0;
+            return h >= 22 || h < 6;
+        }
+        var h24 = Regex.Match(dateTimeStr, @"\b(\d{1,2}):(\d{2})\b");
+        return h24.Success && int.TryParse(h24.Groups[1].Value, out var hour) && (hour >= 22 || hour < 6);
+    }
+
+    private static bool IsAirportAddress(string? address)
+    {
+        if (string.IsNullOrWhiteSpace(address)) return false;
+        var l = address.ToLowerInvariant();
+        return l.Contains("airport") || l.Contains("heathrow") || l.Contains("gatwick")
+            || l.Contains("stansted") || l.Contains("luton") || l.Contains("city airport")
+            || l.Contains("lhr") || l.Contains("lgw") || l.Contains("stn") || l.Contains("lut");
+    }
+
+    // ── Campaign entity persistence (called from HandleConfirmationAsync) ─────
+
+    private async Task SaveCampaignEntityAsync(
+        CallSession session, Campaign campaign, CampaignConfiguration? config,
+        Dictionary<string, string> slots, CancellationToken ct)
+    {
+        switch (campaign.CampaignType)
+        {
+            case CampaignType.CourierService:
+                await SaveCourierEntitiesAsync(session, slots, ct);
+                break;
+            case CampaignType.CabBooking:
+                await SaveCabBookingAsync(session, slots, ct);
+                break;
+            case CampaignType.DoctorAppointment:
+                await SaveDoctorAppointmentAsync(session, slots, ct);
+                break;
+            case CampaignType.RestaurantOrder:
+                await SaveRestaurantOrderAsync(session, config, slots, ct);
+                break;
+        }
+    }
+
+    private async Task SaveCourierEntitiesAsync(CallSession session, Dictionary<string, string> slots, CancellationToken ct)
+    {
+        // Skip if the early-confirm path already saved (FinalResultJson contains orderId)
+        if (!string.IsNullOrWhiteSpace(session.FinalResultJson) && session.FinalResultJson.Contains("\"orderId\""))
+            return;
+
+        var profile = await db.CourierPricingProfiles
+            .FirstOrDefaultAsync(x => x.TenantId == session.TenantId && x.ClientId == session.ClientId && x.IsActive, ct);
+        if (profile is null) return;
+
+        decimal.TryParse(slots.GetValueOrDefault("distanceKm", "0"), out var distKm);
+        if (distKm == 0)
+            distKm = await ResolveDistanceKmAsync(slots.GetValueOrDefault("pickupAddress"), slots.GetValueOrDefault("dropoffAddress"), ct) ?? 8m;
+
+        decimal.TryParse(slots.GetValueOrDefault("weightKg", "0"), out var weight);
+        var packageType = slots.GetValueOrDefault("packageType", "standard");
+        var urgency     = slots.GetValueOrDefault("urgency", "standard");
+
+        var total = await CalculateCourierFareAsync(profile, distKm, weight, packageType, urgency, ct);
+
+        var quote = new CourierQuote
+        {
+            Id = Guid.NewGuid(), TenantId = session.TenantId, ClientId = session.ClientId,
+            CampaignId = session.CampaignId, CallSessionId = session.Id,
+            PickupAddressJson  = JsonSerializer.Serialize(new { address = slots.GetValueOrDefault("pickupAddress") }),
+            DropoffAddressJson = JsonSerializer.Serialize(new { address = slots.GetValueOrDefault("dropoffAddress") }),
+            DistanceKm = distKm, WeightKg = weight, PackageType = packageType, Urgency = urgency,
+            EstimatedDeliveryTime = DateTime.UtcNow.AddHours(urgency == "same_day" ? 2 : 24),
+            BaseFee = profile.BaseFee, DistanceFee = profile.PricePerKm * distKm,
+            WeightFee = profile.PricePerKg * weight, UrgencyFee = 0m,
+            Total = total, Currency = profile.Currency, Status = "Quoted"
+        };
+        db.CourierQuotes.Add(quote);
+
+        var order = new CourierOrder
+        {
+            Id = Guid.NewGuid(), TenantId = session.TenantId, ClientId = session.ClientId,
+            CampaignId = session.CampaignId, CallSessionId = session.Id, CourierQuoteId = quote.Id,
+            CustomerName = slots.GetValueOrDefault("customerName", ""),
+            Phone        = slots.GetValueOrDefault("phone", ""),
+            FinalResultJson = "", Status = "Confirmed"
+        };
+        db.CourierOrders.Add(order);
+
+        session.FinalResultJson = JsonSerializer.Serialize(new
+        {
+            type = "courier_order", quoteId = quote.Id, orderId = order.Id,
+            pickup = slots.GetValueOrDefault("pickupAddress"), dropoff = slots.GetValueOrDefault("dropoffAddress"),
+            weightKg = weight, distanceKm = distKm, total, currency = profile.Currency
+        });
+    }
+
+    private Task SaveCabBookingAsync(CallSession session, Dictionary<string, string> slots, CancellationToken ct)
+    {
+        decimal.TryParse(slots.GetValueOrDefault("distanceKm", "0"), out var distKm);
+        decimal.TryParse(slots.GetValueOrDefault("estimatedFare", "0"), out var fare);
+        int.TryParse(slots.GetValueOrDefault("passengerCount", "1"), out var pax);
+
+        var pickup         = slots.GetValueOrDefault("pickupLocation", "");
+        var dropoff        = slots.GetValueOrDefault("dropoffLocation", "");
+        var pickupDateTime = slots.GetValueOrDefault("pickupDateTime", "");
+        var isAirport      = IsAirportAddress(pickup) || IsAirportAddress(dropoff);
+
+        var booking = new CabBooking
+        {
+            Id = Guid.NewGuid(), TenantId = session.TenantId, ClientId = session.ClientId,
+            CampaignId = session.CampaignId, CallSessionId = session.Id,
+            CustomerName = slots.GetValueOrDefault("customerName", ""),
+            Phone        = slots.GetValueOrDefault("phone", ""),
+            PickupLocation = pickup, DropoffLocation = dropoff, PickupDateTime = pickupDateTime,
+            PassengerCount = pax, VehicleType = slots.GetValueOrDefault("vehicleType", "Standard"),
+            DistanceKm = distKm, EstimatedFare = fare, Currency = "GBP",
+            IsAirportPickup = isAirport, IsNightSurcharge = IsNightTime(pickupDateTime), Status = "Confirmed"
+        };
+        db.CabBookings.Add(booking);
+
+        session.FinalResultJson = JsonSerializer.Serialize(new
+        {
+            type = "cab_booking", bookingId = booking.Id,
+            customerName = booking.CustomerName, phone = booking.Phone,
+            pickupLocation = pickup, dropoffLocation = dropoff, pickupDateTime,
+            passengerCount = pax, vehicleType = booking.VehicleType,
+            distanceKm = distKm, estimatedFare = fare, currency = "GBP",
+            isAirportPickup = isAirport, isNightSurcharge = booking.IsNightSurcharge
+        });
+        return Task.CompletedTask;
+    }
+
+    private Task SaveDoctorAppointmentAsync(CallSession session, Dictionary<string, string> slots, CancellationToken ct)
+    {
+        var appointment = new DoctorAppointment
+        {
+            Id = Guid.NewGuid(), TenantId = session.TenantId, ClientId = session.ClientId,
+            CampaignId = session.CampaignId, CallSessionId = session.Id,
+            PatientName      = slots.GetValueOrDefault("patientName", ""),
+            Phone            = slots.GetValueOrDefault("phone", ""),
+            ReasonForVisit   = slots.GetValueOrDefault("reasonForVisit", ""),
+            PreferredDateTime = slots.GetValueOrDefault("preferredDateTime", ""),
+            PreferredDoctor  = slots.GetValueOrDefault("preferredDoctor", ""),
+            ClinicBranch     = slots.GetValueOrDefault("branch", ""),
+            Status = "Pending"
+        };
+        db.DoctorAppointments.Add(appointment);
+
+        session.FinalResultJson = JsonSerializer.Serialize(new
+        {
+            type = "doctor_appointment", appointmentId = appointment.Id,
+            patientName = appointment.PatientName, phone = appointment.Phone,
+            reasonForVisit = appointment.ReasonForVisit, preferredDateTime = appointment.PreferredDateTime,
+            preferredDoctor = appointment.PreferredDoctor, branch = appointment.ClinicBranch, status = "CapturedOnly"
+        });
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveRestaurantOrderAsync(CallSession session, CampaignConfiguration? config, Dictionary<string, string> slots, CancellationToken ct)
+    {
+        // Skip if the direct "confirm" path already saved
+        if (!string.IsNullOrWhiteSpace(session.FinalResultJson) && session.FinalResultJson.Contains("\"orderId\""))
+            return;
+
+        var cart = ParseCart(slots.GetValueOrDefault("items"));
+        if (cart.Count == 0) return;
+
+        var settings = ParseRestaurantSettings(config?.ValidationRulesJson);
+        var subtotal  = cart.Sum(x => x.LineTotal);
+        var fee       = slots.GetValueOrDefault("fulfillmentType") == "delivery"
+            ? (settings.FreeDeliveryThreshold > 0 && subtotal >= settings.FreeDeliveryThreshold ? 0m : settings.DeliveryFee)
+            : 0m;
+        var tax = subtotal * (settings.TaxRatePercent / 100m);
+        decimal.TryParse(slots.GetValueOrDefault("discount", "0"), out var discount);
+        var total    = subtotal + fee + tax - discount;
+        var currency = cart.FirstOrDefault()?.Currency ?? settings.Currency;
+
+        var order = new RestaurantOrder
+        {
+            Id = Guid.NewGuid(), TenantId = session.TenantId, ClientId = session.ClientId,
+            CampaignId = session.CampaignId, CallSessionId = session.Id,
+            CustomerName    = slots.GetValueOrDefault("customerName", ""),
+            Phone           = slots.GetValueOrDefault("phone", ""),
+            FulfillmentType = slots.GetValueOrDefault("fulfillmentType", "pickup"),
+            ItemsJson = JsonSerializer.Serialize(cart),
+            Subtotal = subtotal, DeliveryFee = fee, Tax = tax, Discount = discount,
+            Total = total, Currency = currency, Status = "Confirmed"
+        };
+        db.RestaurantOrders.Add(order);
+
+        session.FinalResultJson = JsonSerializer.Serialize(new
+        {
+            type = "restaurant_order", orderId = order.Id,
+            subtotal, deliveryFee = fee, tax, discount, total, currency,
+            payment = slots.GetValueOrDefault("paymentMethod") ?? "unknown"
+        });
+
+        await Task.CompletedTask;
     }
 
     // ── RAG helper ────────────────────────────────────────────────────────────
@@ -1335,6 +1804,8 @@ public class ConversationOrchestratorService(
     {
         [JsonPropertyName("id")]             public string Id { get; set; } = string.Empty;
         [JsonPropertyName("slotId")]         public string? SlotId { get; set; }   // if set, store answer under this key instead of Id
+        /// <summary>Declares the expected answer type: "text"|"number"|"date"|"datetime"|"phone"|"yesno"|"enum"</summary>
+        [JsonPropertyName("slotType")]       public string? SlotType { get; set; }
         [JsonPropertyName("order")]          public int Order { get; set; }
         [JsonPropertyName("question")]       public string Question { get; set; } = string.Empty;
         [JsonPropertyName("required")]       public bool Required { get; set; } = true;
@@ -1380,5 +1851,41 @@ public class ConversationOrchestratorService(
         [JsonPropertyName("name")]          public string Name { get; set; } = string.Empty;
         [JsonPropertyName("speciality")]    public string Speciality { get; set; } = string.Empty;
         [JsonPropertyName("availableDays")] public List<string> AvailableDays { get; set; } = [];
+    }
+
+    private sealed class CabFareSettings
+    {
+        public decimal BaseFare              { get; set; } = 3.50m;
+        public decimal PricePerKm            { get; set; } = 1.80m;
+        public decimal MinimumFare           { get; set; } = 6.00m;
+        public decimal NightChargeMultiplier { get; set; } = 1.25m;
+        public decimal AirportPickupFee      { get; set; } = 5.00m;
+    }
+
+    private static CabFareSettings ParseCabFareSettings(string? validationRulesJson)
+    {
+        if (string.IsNullOrWhiteSpace(validationRulesJson)) return new CabFareSettings();
+        try
+        {
+            using var doc = JsonDocument.Parse(validationRulesJson);
+            if (!doc.RootElement.TryGetProperty("fareSettings", out var fareEl)) return new CabFareSettings();
+            return JsonSerializer.Deserialize<CabFareSettings>(fareEl.GetRawText(), JsonOpts) ?? new CabFareSettings();
+        }
+        catch { return new CabFareSettings(); }
+    }
+
+    private sealed class RestaurantSettings
+    {
+        public decimal DeliveryFee            { get; set; } = 3.99m;
+        public decimal TaxRatePercent         { get; set; } = 0m;
+        public string  Currency               { get; set; } = "GBP";
+        public decimal FreeDeliveryThreshold  { get; set; } = 0m;
+    }
+
+    private static RestaurantSettings ParseRestaurantSettings(string? validationRulesJson)
+    {
+        if (string.IsNullOrWhiteSpace(validationRulesJson)) return new RestaurantSettings();
+        try { return JsonSerializer.Deserialize<RestaurantSettings>(validationRulesJson, JsonOpts) ?? new RestaurantSettings(); }
+        catch { return new RestaurantSettings(); }
     }
 }

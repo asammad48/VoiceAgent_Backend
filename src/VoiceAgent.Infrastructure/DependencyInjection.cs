@@ -6,6 +6,7 @@ using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Application.Interfaces.Providers;
 using VoiceAgent.Application.Interfaces.Tools;
 using VoiceAgent.Infrastructure.Caching;
+using VoiceAgent.Infrastructure.Http;
 using VoiceAgent.Infrastructure.Persistence;
 using VoiceAgent.Infrastructure.Persistence.Seed;
 using VoiceAgent.Infrastructure.Providers;
@@ -50,13 +51,16 @@ public static class DependencyInjection
         services.PostConfigure<FreeSwitchOptions>(o => o.UseMockProviders = useMockProviders);
         services.PostConfigure<TelnyxOptions>(o => o.UseMockProviders = useMockProviders);
 
-        services.AddHttpClient<GeminiClient>();
-        services.AddHttpClient<DeepgramClient>();
-        services.AddHttpClient<ElevenLabsClient>();
-        services.AddHttpClient<NominatimGeocodingClient>();
-        services.AddHttpClient<OsrmRoutingClient>();
-        services.AddHttpClient<CloudflareR2StorageClient>();
-        services.AddHttpClient<TelnyxTelephonyProvider>();
+        // Retry handler — transient; one instance per HTTP request pipeline
+        services.AddTransient<HttpRetryHandler>();
+
+        services.AddHttpClient<GeminiClient>().AddHttpMessageHandler<HttpRetryHandler>();
+        services.AddHttpClient<DeepgramClient>().AddHttpMessageHandler<HttpRetryHandler>();
+        services.AddHttpClient<ElevenLabsClient>().AddHttpMessageHandler<HttpRetryHandler>();
+        services.AddHttpClient<NominatimGeocodingClient>().AddHttpMessageHandler<HttpRetryHandler>();
+        services.AddHttpClient<OsrmRoutingClient>().AddHttpMessageHandler<HttpRetryHandler>();
+        services.AddHttpClient<CloudflareR2StorageClient>().AddHttpMessageHandler<HttpRetryHandler>();
+        services.AddHttpClient<TelnyxTelephonyProvider>().AddHttpMessageHandler<HttpRetryHandler>();
         services.AddSingleton<FreeSwitchTelephonyProvider>();
         services.AddScoped<IStreamingSpeechToTextProvider, DeepgramStreamingSpeechToTextProvider>();
         services.AddScoped<IStreamingTextToSpeechProvider, ElevenLabsStreamingTextToSpeechProvider>();
@@ -79,9 +83,17 @@ public static class DependencyInjection
         services.AddScoped<IAgentTool, CourierQuoteTool>();
 
         if (useMockProviders)
+        {
             services.AddScoped<ISlotExtractionService, MockSlotExtractionService>();
+            services.AddScoped<IAnswerFinalizationService, MockAnswerFinalizationService>();
+            services.AddScoped<ILocationNormalizationService, MockLocationNormalizationService>();
+        }
         else
+        {
             services.AddScoped<ISlotExtractionService, GeminiSlotExtractionService>();
+            services.AddScoped<IAnswerFinalizationService, GeminiAnswerFinalizationService>();
+            services.AddScoped<ILocationNormalizationService, GeminiLocationNormalizationService>();
+        }
 
         services.AddScoped<DbSeeder>();
         return services;
