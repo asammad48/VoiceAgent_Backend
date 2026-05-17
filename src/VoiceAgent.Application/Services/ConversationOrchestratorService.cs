@@ -19,11 +19,16 @@ public class ConversationOrchestratorService(
     IRagRetrievalService ragRetrievalService,
     ISlotExtractionService slotExtractionService,
     IAnswerFinalizationService finalizationService,
-    ILocationNormalizationService locationNormalization) : IConversationOrchestratorService
+    ILocationNormalizationService locationNormalization,
+    IIntentDetectionService intentDetectionService,
+    ILookupService lookupService) : IConversationOrchestratorService
 {
     // ── Entry points ──────────────────────────────────────────────────────────
 
-    public async Task<SendDemoMessageResponseDto> ProcessMessageAsync(Guid callSessionId, string message, CancellationToken ct = default)
+    public async Task<SendDemoMessageResponseDto> ProcessMessageAsync(
+        Guid callSessionId, string message,
+        Func<string, CancellationToken, Task>? onInterimMessage = null,
+        CancellationToken ct = default)
     {
         var session = await db.CallSessions.FirstOrDefaultAsync(x => x.Id == callSessionId, ct)
             ?? throw new InvalidOperationException("Call session not found.");
@@ -120,8 +125,21 @@ public class ConversationOrchestratorService(
             return new SendDemoMessageResponseDto { Reply = redirect, CurrentState = session.CurrentState.ToString(), MissingSlots = [] };
         }
 
+        // Intent detection (multi-intent campaigns)
+        if (session.CurrentState is ConversationState.Greeting or ConversationState.IntentDetection)
+        {
+            var rootQ = TryParseQuestionnaire(config?.QuestionnaireJson);
+            if (rootQ.IsMultiIntent)
+            {
+                var (intentReply, intentEnd, intentReason) = await HandleIntentDetectionAsync(session, campaign, config, rootQ, message, lower, onInterimMessage, ct);
+                db.CallTurns.Add(new CallTurn { Id = Guid.NewGuid(), CallSessionId = session.Id, TurnNumber = turnNumber + 1, Speaker = "bot", Text = intentReply, StateAfter = session.CurrentState.ToString() });
+                await db.SaveChangesAsync(ct);
+                return new SendDemoMessageResponseDto { Reply = intentReply, CurrentState = session.CurrentState.ToString(), ShouldEndCall = intentEnd, EndReason = intentReason, MissingSlots = [] };
+            }
+        }
+
         // Main questionnaire engine
-        var result = await HandleQuestionnaireAsync(session, campaign, config, message, lower, ct);
+        var result = await HandleQuestionnaireAsync(session, campaign, config, message, lower, onInterimMessage, ct);
         db.CallTurns.Add(new CallTurn { Id = Guid.NewGuid(), CallSessionId = session.Id, TurnNumber = turnNumber + 1, Speaker = "bot", Text = result.Reply, StateAfter = session.CurrentState.ToString() });
         await db.SaveChangesAsync(ct);
 
@@ -134,7 +152,7 @@ public class ConversationOrchestratorService(
     }
 
     public Task<string> OrchestrateAsync(Guid callSessionId, string message, CancellationToken ct = default)
-        => ProcessMessageAsync(callSessionId, message, ct).ContinueWith(t => t.Result.Reply, ct);
+        => ProcessMessageAsync(callSessionId, message, ct: ct).ContinueWith(t => t.Result.Reply, ct);
 
     // ── Slot labels and keyword map (for confirmation edit flow) ─────────────
 
@@ -178,6 +196,21 @@ public class ConversationOrchestratorService(
         ["reasonForVisit"]        = "reason for visit",
         ["branch"]                = "clinic location",
         ["planType"]              = "plan type",
+        // multi-intent service slots
+        ["contactName"]           = "contact name",
+        ["issueDescription"]      = "issue description",
+        ["complaintDetail"]       = "complaint details",
+        ["changeRequest"]         = "change request",
+        ["inquiryText"]           = "inquiry",
+        ["trackingNumber"]        = "tracking number",
+        ["bookingRef"]            = "booking reference",
+        ["orderRef"]              = "order reference",
+        ["appointmentRef"]        = "appointment reference",
+        ["specialty"]             = "specialty",
+        ["newDate"]               = "new date",
+        ["newDateTime"]           = "new date and time",
+        ["itemDescription"]       = "item description",
+        ["preferredDate"]         = "preferred date",
     };
 
     // ordered most-specific first so short keywords don't shadow longer ones
@@ -231,11 +264,35 @@ public class ConversationOrchestratorService(
         ("vehicle", "vehicleType"),
         ("age range", "ageRange"),
         ("age", "age"),
+        // multi-intent service slot keywords
+        ("tracking number", "trackingNumber"),
+        ("tracking", "trackingNumber"),
+        ("booking reference", "bookingRef"),
+        ("booking ref", "bookingRef"),
+        ("order reference", "orderRef"),
+        ("order ref", "orderRef"),
+        ("appointment reference", "appointmentRef"),
+        ("appointment ref", "appointmentRef"),
+        ("specialty", "specialty"),
+        ("new date and time", "newDateTime"),
+        ("new date", "newDate"),
+        ("new time", "newDateTime"),
+        ("preferred date", "preferredDate"),
+        ("item description", "itemDescription"),
+        ("lost item", "itemDescription"),
+        ("complaint detail", "complaintDetail"),
+        ("complaint", "complaintDetail"),
+        ("issue description", "issueDescription"),
+        ("issue", "issueDescription"),
+        ("change request", "changeRequest"),
+        ("inquiry", "inquiryText"),
+        ("contact name", "contactName"),
         // name variants — each campaign uses one; TryParseFieldReference checks filledSlotIds
         ("patient name", "patientName"),
         ("customer name", "customerName"),
         ("lead name", "leadName"),
         ("my name", "firstName"),
+        ("name", "contactName"),
         ("name", "leadName"),
         ("name", "customerName"),
         ("name", "patientName"),
@@ -254,8 +311,43 @@ public class ConversationOrchestratorService(
     private async Task<(string Reply, bool ShouldEndCall, string? EndReason)> HandleConfirmationAsync(
         CallSession session, string lower, Campaign campaign, CampaignConfiguration? config, CancellationToken ct)
     {
-        var questionnaire = TryParseQuestionnaire(config?.QuestionnaireJson);
+        var questionnaire = GetEffectiveQuestionnaire(config, session.DetectedIntent);
         var slots = ParseSlots(session.CollectedSlotsJson);
+
+        // Lookup-with-continuation offer: user is responding yes/no to "Would you like to book?"
+        if (slots.TryGetValue("__lookup_offered__", out var offeredContinueIntent))
+        {
+            var offerYes = Regex.IsMatch(lower, @"\b(yes|yeah|yep|yup|sure|ok|okay|go ahead|book it|proceed|absolutely|definitely)\b");
+            var offerNo  = Regex.IsMatch(lower, @"\b(no|nope|nah|not|no thanks|no thank)\b");
+            if (offerYes && !offerNo)
+            {
+                slots.Remove("__lookup_offered__");
+                session.DetectedIntent = offeredContinueIntent;
+                session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+
+                var root = TryParseQuestionnaire(config?.QuestionnaireJson);
+                var bookingIntent = root.Intents.FirstOrDefault(i => i.Id == offeredContinueIntent);
+                var bookingQ = bookingIntent?.Questionnaire ?? new QuestionnaireDefinition();
+
+                // Skip already-filled slots (e.g. pickupLocation/dropoffLocation carried over from fare_estimate)
+                var firstUnanswered = FindFirstUnansweredQuestion(bookingQ, slots);
+                if (firstUnanswered is not null)
+                {
+                    session.CurrentState = ConversationState.CollectingSlots;
+                    session.CurrentQuestionId = firstUnanswered.Id;
+                    return (firstUnanswered.Question, false, null);
+                }
+                // All booking questions already filled — go straight to summary
+                var summaryResult = await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, bookingQ, null, ct);
+                return (summaryResult.Reply, summaryResult.ShouldEndCall, summaryResult.EndReason);
+            }
+            if (offerNo || !offerYes)
+            {
+                session.CurrentState = ConversationState.Declined;
+                session.EndReason = "user_declined_continue";
+                return ("No problem! Feel free to call back when you're ready. Have a great day!", true, "user_declined_continue");
+            }
+        }
 
         // Priority 1: inline correction ("my age is 40", "actually my name is Sarah")
         var inline = TryParseInlineCorrection(lower, slots, questionnaire);
@@ -287,15 +379,27 @@ public class ConversationOrchestratorService(
             session.EndReason = "completed_happy_path";
             // Save campaign-specific entities (courier, cab, doctor, restaurant)
             await SaveCampaignEntityAsync(session, campaign, config, slots, ct);
-            var closing = !string.IsNullOrWhiteSpace(questionnaire.ClosingScript)
+            // Primary booking intents always get the dynamic confirmation (includes reference ID).
+            // Complaint/incident intents use their static closingScript.
+            var useDynamic = string.IsNullOrWhiteSpace(session.DetectedIntent)
+                             || PrimaryBookingIntents.Contains(session.DetectedIntent);
+            var closing = (!useDynamic && !string.IsNullOrWhiteSpace(questionnaire.ClosingScript))
                 ? questionnaire.ClosingScript
-                : BuildConfirmation(campaign.CampaignType, slots);
+                : BuildConfirmation(campaign.CampaignType, slots, session);
             return (closing, true, "completed_happy_path");
         }
 
-        // Priority 4: plain "no" without a specific field → ask what to change
+        // Priority 4: plain "no" without a specific field → check for price decline first, then ask what to change
         if (no && !yes)
         {
+            var isPriceDecline = Regex.IsMatch(lower,
+                @"\b(too (much|expensive|high|costly|pricey|dear)|can'?t afford|not worth|overpriced|too far|not (ok|okay) with (the |that )?(price|fare|cost)|don'?t want (it|to proceed))\b");
+            if (isPriceDecline)
+            {
+                session.CurrentState = ConversationState.Declined;
+                session.EndReason = "price_declined";
+                return ("No problem at all! Feel free to call back if you change your mind. Have a great day!", true, "price_declined");
+            }
             var summary = BuildNumberedSummary(slots, questionnaire);
             return ($"No problem! {summary} Which item would you like to change? You can say the number or the field name.", false, null);
         }
@@ -311,7 +415,7 @@ public class ConversationOrchestratorService(
         Campaign campaign, CampaignConfiguration? config, CancellationToken ct)
     {
         var slotId = session.EditingSlotId!;
-        var questionnaire = TryParseQuestionnaire(config?.QuestionnaireJson);
+        var questionnaire = GetEffectiveQuestionnaire(config, session.DetectedIntent);
         var slots = ParseSlots(session.CollectedSlotsJson);
 
         // Find the question for this slot to get validValues and question text
@@ -341,6 +445,74 @@ public class ConversationOrchestratorService(
 
         var summary = BuildNumberedSummary(slots, questionnaire);
         return ($"Updated! {summary} Does everything look correct now?", false, null);
+    }
+
+    // ── Intent detection (multi-intent campaigns) ─────────────────────────────
+
+    private async Task<(string Reply, bool ShouldEndCall, string? EndReason)> HandleIntentDetectionAsync(
+        CallSession session, Campaign campaign, CampaignConfiguration? config,
+        QuestionnaireDefinition rootQuestionnaire, string message, string lower,
+        Func<string, CancellationToken, Task>? onInterimMessage,
+        CancellationToken ct)
+    {
+        var triggers = rootQuestionnaire.Intents
+            .Select(i => new IntentTrigger(i.Id, i.Name, i.Type, i.Triggers))
+            .ToList();
+
+        var match = await intentDetectionService.DetectAsync(message, triggers, ct);
+
+        if (match is null)
+        {
+            if (session.CurrentState == ConversationState.IntentDetection)
+            {
+                // Second failure → immediate human transfer
+                session.CurrentState = ConversationState.Completed;
+                session.EndReason = "human_transfer";
+                session.HandoffRequested = true;
+                return ("I'm sorry, I wasn't able to help with that. Let me connect you to a team member. Please stay on the line.", true, "human_transfer");
+            }
+
+            session.CurrentState = ConversationState.IntentDetection;
+            var options = string.Join(", ", rootQuestionnaire.Intents
+                .Where(i => i.Type != "transfer")
+                .Select(i => i.Name));
+            return ($"I can help with: {options}. Which would you like?", false, null);
+        }
+
+        var intent = rootQuestionnaire.Intents.First(i => i.Id == match.IntentId);
+        session.DetectedIntent = intent.Id;
+
+        // Transfer intents → immediate handoff
+        if (intent.Type == "transfer")
+        {
+            session.CurrentState = ConversationState.Completed;
+            session.EndReason = "human_transfer";
+            session.HandoffRequested = true;
+            var msg = !string.IsNullOrWhiteSpace(intent.TransferMessage)
+                ? intent.TransferMessage
+                : "Connecting you to a team member. Please stay on the line.";
+            return (msg, true, "human_transfer");
+        }
+
+        // Lookup / collect intents → start the sub-questionnaire
+        session.CurrentState = ConversationState.CollectingSlots;
+        if (intent.Questionnaire is not null && intent.Questionnaire.Questions.Count > 0)
+        {
+            var firstQ = !string.IsNullOrWhiteSpace(intent.Questionnaire.StartQuestionId)
+                ? intent.Questionnaire.Questions.FirstOrDefault(q => q.Id == intent.Questionnaire.StartQuestionId)
+                : intent.Questionnaire.Questions.OrderBy(q => q.Order).FirstOrDefault();
+
+            if (firstQ is not null)
+            {
+                session.CurrentQuestionId = firstQ.Id;
+                return (firstQ.Question, false, null);
+            }
+        }
+
+        // No sub-questionnaire (e.g. a collect intent that jumped straight to existing questions):
+        // fall through to the main questionnaire engine by processing this message again.
+        var result = await HandleQuestionnaireAsync(session, campaign, config, message, lower, onInterimMessage, ct);
+        return (result.Reply, result.ShouldEndCall, result.EndReason);
     }
 
     // ── Inline correction / field reference parsers ───────────────────────────
@@ -494,9 +666,11 @@ public class ConversationOrchestratorService(
 
     private async Task<(string Reply, List<string> MissingSlots, object? FinalResult, bool ShouldEndCall, string? EndReason)> HandleQuestionnaireAsync(
         CallSession session, Campaign campaign, CampaignConfiguration? config,
-        string message, string lower, CancellationToken ct)
+        string message, string lower,
+        Func<string, CancellationToken, Task>? onInterimMessage,
+        CancellationToken ct)
     {
-        var questionnaire = TryParseQuestionnaire(config?.QuestionnaireJson);
+        var questionnaire = GetEffectiveQuestionnaire(config, session.DetectedIntent);
         var slots = ParseSlots(session.CollectedSlotsJson);
 
         // Campaign-specific extras first (cart, pricing, availability)
@@ -532,7 +706,7 @@ public class ConversationOrchestratorService(
 
         // Navigated past the last question — build summary
         if (current is null)
-            return await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, questionnaire, ct);
+            return await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, questionnaire, onInterimMessage, ct);
 
         // Resolve actual slot key (slotId overrides question id for shared-slot questions like healthConditions variants)
         var slotKey = current.SlotId ?? current.Id;
@@ -595,11 +769,11 @@ public class ConversationOrchestratorService(
         while (true)
         {
             if (string.IsNullOrWhiteSpace(nextId))
-                return await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, questionnaire, ct);
+                return await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, questionnaire, onInterimMessage, ct);
 
             var nextQ = questionnaire.Questions.FirstOrDefault(q => q.Id == nextId);
             if (nextQ is null)
-                return await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, questionnaire, ct);
+                return await BuildSummaryAndAwaitConfirmationAsync(session, campaign, config, slots, questionnaire, onInterimMessage, ct);
 
             var nextSlotKey = nextQ.SlotId ?? nextQ.Id;
             if (!slots.ContainsKey(nextSlotKey))
@@ -619,6 +793,24 @@ public class ConversationOrchestratorService(
         }
     }
 
+    private static QuestionDefinition? FindFirstUnansweredQuestion(QuestionnaireDefinition questionnaire, Dictionary<string, string> slots)
+    {
+        var current = !string.IsNullOrWhiteSpace(questionnaire.StartQuestionId)
+            ? questionnaire.Questions.FirstOrDefault(q => q.Id == questionnaire.StartQuestionId)
+            : questionnaire.Questions.OrderBy(q => q.Order).FirstOrDefault();
+
+        while (current is not null)
+        {
+            var slotKey = current.SlotId ?? current.Id;
+            if (!slots.ContainsKey(slotKey)) return current;
+            var branch = ResolveBranch(current, slots[slotKey]);
+            var nextId = branch?.NextQuestionId ?? current.NextQuestionId;
+            if (string.IsNullOrWhiteSpace(nextId)) return null;
+            current = questionnaire.Questions.FirstOrDefault(q => q.Id == nextId);
+        }
+        return null;
+    }
+
     private static QuestionBranch? ResolveBranch(QuestionDefinition q, string value)
     {
         var exact = q.Branches.FirstOrDefault(b => string.Equals(b.When, value, StringComparison.OrdinalIgnoreCase));
@@ -628,8 +820,52 @@ public class ConversationOrchestratorService(
     private async Task<(string Reply, List<string> MissingSlots, object? FinalResult, bool ShouldEndCall, string? EndReason)>
         BuildSummaryAndAwaitConfirmationAsync(
             CallSession session, Campaign campaign, CampaignConfiguration? config,
-            Dictionary<string, string> slots, QuestionnaireDefinition questionnaire, CancellationToken ct)
+            Dictionary<string, string> slots, QuestionnaireDefinition questionnaire,
+            Func<string, CancellationToken, Task>? onInterimMessage,
+            CancellationToken ct)
     {
+        // ── Lookup intent path ────────────────────────────────────────────────
+        if (!string.IsNullOrWhiteSpace(session.DetectedIntent))
+        {
+            var root = TryParseQuestionnaire(config?.QuestionnaireJson);
+            var intentDef = root.Intents.FirstOrDefault(i => i.Id == session.DetectedIntent);
+            if (intentDef?.Type == "lookup")
+            {
+                if (onInterimMessage is not null)
+                    await onInterimMessage("Please bear with me while I look that up.", ct);
+
+                // Pre-calculate fare for fare_estimate so MockLookupService can use real distance/fare
+                if (session.DetectedIntent == "fare_estimate" && !slots.ContainsKey("distanceKm"))
+                {
+                    var distKm = await ResolveDistanceKmAsync(
+                        slots.GetValueOrDefault("pickupLocation"),
+                        slots.GetValueOrDefault("dropoffLocation"), ct) ?? 5m;
+                    slots["distanceKm"] = distKm.ToString("F1");
+                    var fareSettings = ParseCabFareSettings(config?.ValidationRulesJson);
+                    var pickDt = slots.GetValueOrDefault("pickupDateTime", "");
+                    var airport = IsAirportAddress(slots.GetValueOrDefault("pickupLocation")) || IsAirportAddress(slots.GetValueOrDefault("dropoffLocation"));
+                    slots["estimatedFare"] = CalculateCabFare(fareSettings, distKm, pickDt, airport).ToString("F2");
+                    session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+                }
+
+                var lookupResult = await lookupService.ExecuteAsync(session.DetectedIntent, slots,
+                    new LookupContext(session.TenantId, session.ClientId, session.CampaignId, session.Id), ct);
+
+                if (lookupResult.OffersContinue && !string.IsNullOrWhiteSpace(lookupResult.ContinueToIntentId))
+                {
+                    // Stay active so user can say yes/no to the continuation offer
+                    slots["__lookup_offered__"] = lookupResult.ContinueToIntentId;
+                    session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+                    session.CurrentState = ConversationState.AwaitingConfirmation;
+                    return (lookupResult.Message, [], null, false, null);
+                }
+
+                session.CurrentState = ConversationState.Completed;
+                session.EndReason = "lookup_completed";
+                return (lookupResult.Message, [], null, true, "lookup_completed");
+            }
+        }
+
         // ── LLM Finalization ──────────────────────────────────────────────────
         // Run once after all slots collected. If the LLM detects an ambiguous or
         // invalid answer (e.g. "On" stored as a date), remove it and re-ask.
@@ -646,6 +882,9 @@ public class ConversationOrchestratorService(
 
             if (answers.Count > 0)
             {
+                if (onInterimMessage is not null)
+                    await onInterimMessage("Please bear with me while I compile your information.", ct);
+
                 var finalization = await finalizationService.FinalizeAnswersAsync(answers, ct);
                 if (!finalization.AllClear && finalization.AmbiguousSlotIds.Count > 0)
                 {
@@ -674,6 +913,8 @@ public class ConversationOrchestratorService(
         // Courier: proactive fare quote instead of generic numbered summary
         if (campaign.CampaignType == CampaignType.CourierService)
         {
+            if (onInterimMessage is not null)
+                await onInterimMessage("Please bear with me while I calculate your quote.", ct);
             var courierReply = await BuildCourierQuoteSummaryAsync(session, slots, ct);
             var courierResult = BuildFinalResult(campaign.CampaignType, slots, session);
             session.FinalResultJson = JsonSerializer.Serialize(courierResult);
@@ -683,6 +924,8 @@ public class ConversationOrchestratorService(
         // Cab: proactive fare quote instead of generic numbered summary
         if (campaign.CampaignType == CampaignType.CabBooking)
         {
+            if (onInterimMessage is not null)
+                await onInterimMessage("Please bear with me while I calculate your fare.", ct);
             var cabReply = await BuildCabQuoteSummaryAsync(session, config, slots, ct);
             var cabResult = BuildFinalResult(campaign.CampaignType, slots, session);
             session.FinalResultJson = JsonSerializer.Serialize(cabResult);
@@ -720,7 +963,7 @@ public class ConversationOrchestratorService(
         var pickup  = slots.GetValueOrDefault("pickupAddress", "pickup");
         var dropoff = slots.GetValueOrDefault("dropoffAddress", "destination");
 
-        return $"That's approximately {distKm:F1} km. Estimated cost for a {weight:F1} kg {packageType} package from {pickup} to {dropoff}: {profile.Currency}{fare:F2}. Shall I go ahead and confirm the booking?";
+        return $"That's approximately {distKm:F1} km. Estimated cost for a {weight:F1} kg {packageType} package from {pickup} to {dropoff}: {profile.Currency}{fare:F2}. Are you happy with that price and shall I go ahead and confirm the booking?";
     }
 
     private async Task<string> BuildCabQuoteSummaryAsync(CallSession session, CampaignConfiguration? config, Dictionary<string, string> slots, CancellationToken ct)
@@ -747,7 +990,7 @@ public class ConversationOrchestratorService(
         var vehicleType = slots.GetValueOrDefault("vehicleType", "Standard");
         var surchargeNote = isAirport ? " (includes airport fee)" : (isNight ? " (includes night surcharge)" : "");
 
-        return $"Your {vehicleType} from {pickup} to {dropoff} is approximately {distKm:F1} km. Estimated fare: £{fare:F2}{surchargeNote}. Shall I confirm your booking?";
+        return $"Your {vehicleType} from {pickup} to {dropoff} is approximately {distKm:F1} km. Estimated fare: £{fare:F2}{surchargeNote}. Are you happy with that fare and shall I confirm your booking?";
     }
 
     private static string? CheckCampaignDisqualification(CampaignType type, string slotId, string lower, CallSession session)
@@ -786,7 +1029,7 @@ public class ConversationOrchestratorService(
         {
             "items" => null,
 
-            "firstName" or "customerName" or "leadName" or "patientName" or "beneficiaryName"
+            "firstName" or "customerName" or "leadName" or "patientName" or "beneficiaryName" or "contactName"
                 => ExtractName(message, lower),
 
             "phone" or "callbackPhone"
@@ -844,12 +1087,79 @@ public class ConversationOrchestratorService(
             "incomeRange" or "monthlyRevenueRange"
                 => ExtractIncomeRange(message, lower),
 
+            // Location slots: strip spoken sentence prefixes before storing
+            "pickupLocation" or "dropoffLocation" or "pickupAddress" or "dropoffAddress"
+                => StripLocationPrefix(message),
+
+            // Reference slots: extract only the alphanumeric code, not the surrounding sentence
+            "bookingRef" or "trackingNumber" or "orderRef" or "appointmentRef"
+                => ExtractReferenceCode(message),
+
             // Date/time slots require an actual recognisable date or time pattern
             "pickupDateTime" or "preferredDateTime" or "DateTime"
                 => ExtractDateTimeValue(message, lower),
 
             _ => ExtractBySlotType(slotType, message, lower)
         };
+    }
+
+    // Strips spoken sentence prefixes from location answers:
+    //   "From Rawalpindi, Pakistan."                      → "Rawalpindi, Pakistan"
+    //   "I'm heading toward the airport."                 → "the airport"
+    //   "Going to London Heathrow"                        → "London Heathrow"
+    //   "It will be picked up from, Heathrow Airport."   → "Heathrow Airport"
+    //   "Picked up from Victoria Station"                 → "Victoria Station"
+    //   "Departing from Manchester Piccadilly"            → "Manchester Piccadilly"
+    private static string? StripLocationPrefix(string message)
+    {
+        const string pattern =
+            @"^(?:" +
+            // First-person + movement verb: "I'm going to...", "I am heading from..."
+            @"i(?:'m|\s+am)\s+(?:going|heading|coming|travelling|traveling)(?:\s+(?:to|from|toward|towards))?\s+|" +
+            // Movement verb at start: "Going to...", "Heading toward..."
+            @"(?:going|heading|travelling|traveling)\s+(?:to|from|toward|towards)\s+|" +
+            // Simple preposition: "From X" / "To X"
+            @"(?:from|to)\s+|" +
+            // Passive pickup (long form): "it will/'ll be picked up from, X" / "it'll be collected from X"
+            @"it(?:\s+will|\s+'ll)?\s+be\s+(?:picked\s+up|collected)\s+from[,\s]+|" +
+            // Passive pickup (short): "picked up from X" / "collected from X"
+            @"(?:picked\s+up|collected)\s+from[,\s]+|" +
+            // Implicit source: "it's from X" / "it is from X"
+            @"it(?:'s|\s+is)\s+from\s+|" +
+            // Nominal pickup/dropoff: "the pickup is from/at X" / "my pickup will be at X"
+            @"(?:the|my)\s+(?:pickup|pick.?up|collection|dropoff|drop.?off)\s+(?:is|will\s+be)\s+(?:from|at)\s+|" +
+            // Departure verbs: "departing from X" / "leaving from X" / "starting from X"
+            @"(?:departing|leaving|starting)\s+(?:from|at)\s+" +
+            @")";
+
+        var trimmed = message.Trim();
+        var stripped = Regex.Replace(trimmed, pattern, string.Empty, RegexOptions.IgnoreCase).TrimEnd('.');
+
+        // Safety net: if the regex found nothing to strip and the reply is long enough
+        // to be a full sentence (6+ words), return null so the LLM extractor handles it.
+        if (string.Equals(stripped, trimmed.TrimEnd('.'), StringComparison.OrdinalIgnoreCase)
+            && stripped.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 5)
+            return null;
+
+        return IsMeaningfulResponse(stripped.ToLowerInvariant()) ? stripped : null;
+    }
+
+    // Extracts an alphanumeric reference code from a spoken reply.
+    // Scans tokens for the first that contains BOTH letters and digits (min 3 chars),
+    // returning it uppercased. Returns null when no code-like token is found so the
+    // LLM extractor handles unusual phrasing (e.g. purely numeric IDs).
+    //   "Yes. It is 6B7D855D."      → "6B7D855D"
+    //   "My reference is BOOK-24-1" → "BOOK-24-1"
+    //   "6b7d855d"                  → "6B7D855D"
+    private static string? ExtractReferenceCode(string message)
+    {
+        foreach (Match m in Regex.Matches(message, @"\b([A-Z0-9]{3,}(?:[-][A-Z0-9]{2,})*)\b", RegexOptions.IgnoreCase))
+        {
+            var candidate = m.Groups[1].Value.ToUpperInvariant();
+            if (candidate.Any(char.IsLetter) && candidate.Any(char.IsDigit))
+                return candidate;
+        }
+        return null;
     }
 
     // Falls through from TryExtractValue when no slot-specific handler matches.
@@ -1020,10 +1330,18 @@ public class ConversationOrchestratorService(
 
     // ── Campaign-specific extras (cart building, pricing) ─────────────────────
 
+    private static readonly HashSet<string> PrimaryBookingIntents =
+        new(StringComparer.OrdinalIgnoreCase) { "book_cab", "book_pickup", "new_order", "book_appointment" };
+
     private async Task<(string Reply, List<string> MissingSlots, object? FinalResult)?> HandleCampaignSpecificAsync(
         CallSession session, Campaign campaign, CampaignConfiguration? config,
         string message, string lower, Dictionary<string, string> slots, CancellationToken ct)
     {
+        // Skip cart / pricing extras for non-booking intents (complaint, lookup, transfer, etc.)
+        if (!string.IsNullOrWhiteSpace(session.DetectedIntent) &&
+            !PrimaryBookingIntents.Contains(session.DetectedIntent))
+            return null;
+
         return campaign.CampaignType switch
         {
             CampaignType.RestaurantOrder   => await HandleRestaurantExtrasAsync(session, config, lower, message, slots, ct),
@@ -1355,20 +1673,45 @@ public class ConversationOrchestratorService(
         };
     }
 
-    private static string BuildConfirmation(CampaignType type, Dictionary<string, string> slots)
+    private static string BuildConfirmation(CampaignType type, Dictionary<string, string> slots, CallSession session)
     {
-        var name = slots.GetValueOrDefault("firstName") ?? slots.GetValueOrDefault("customerName")
-                ?? slots.GetValueOrDefault("leadName") ?? slots.GetValueOrDefault("patientName") ?? "there";
+        var name  = slots.GetValueOrDefault("firstName") ?? slots.GetValueOrDefault("customerName")
+                 ?? slots.GetValueOrDefault("leadName")  ?? slots.GetValueOrDefault("patientName") ?? "there";
+        var phone = slots.GetValueOrDefault("phone", "the number you provided");
+        var ref_  = TryExtractShortRef(session.FinalResultJson, type);
         return type switch
         {
+            CampaignType.RestaurantOrder   => $"Your order has been placed{ref_}. Thank you, {name}! We'll contact you at {phone} if needed.",
+            CampaignType.CabBooking        => $"All set, {name}! Your cab has been booked{ref_}. We'll confirm at {phone} shortly.",
+            CampaignType.CourierService    => $"Booked, {name}! Your courier order{ref_} has been submitted. We'll confirm at {phone} shortly.",
+            CampaignType.DoctorAppointment => $"Thank you, {name}. Your appointment{ref_} has been captured and our team will confirm at {phone} shortly.",
             CampaignType.MedicareSales     => $"Thank you, {name}! A licensed Medicare specialist will call you {slots.GetValueOrDefault("callbackTime", "soon")}. Have a great day!",
-            CampaignType.AcaSales          => $"Perfect, {name}! A licensed health coverage agent will reach out {slots.GetValueOrDefault("callbackTime", "soon")} at {slots.GetValueOrDefault("phone", "the number you provided")}. Have a great day!",
-            CampaignType.FeSales           => $"Thank you, {name}! A licensed final expense specialist will call you {slots.GetValueOrDefault("callbackTime", "soon")} at {slots.GetValueOrDefault("phone", "the number you provided")}. Have a wonderful day!",
-            CampaignType.DoctorAppointment => $"Thank you, {name}. Your appointment request has been saved and the clinic team will confirm availability shortly.",
-            CampaignType.CabBooking        => $"All set, {name}! Your cab booking has been captured. We'll confirm at {slots.GetValueOrDefault("phone")} shortly.",
-            CampaignType.CourierService    => $"Booked, {name}! Your courier request has been submitted. We'll confirm at {slots.GetValueOrDefault("phone")} shortly.",
+            CampaignType.AcaSales          => $"Perfect, {name}! A licensed health coverage agent will reach out {slots.GetValueOrDefault("callbackTime", "soon")} at {phone}. Have a great day!",
+            CampaignType.FeSales           => $"Thank you, {name}! A licensed final expense specialist will call you {slots.GetValueOrDefault("callbackTime", "soon")} at {phone}. Have a wonderful day!",
             _                              => $"Thank you, {name}! Everything has been saved and we'll be in touch soon."
         };
+    }
+
+    private static string TryExtractShortRef(string? finalResultJson, CampaignType type)
+    {
+        if (string.IsNullOrWhiteSpace(finalResultJson)) return "";
+        try
+        {
+            using var doc = JsonDocument.Parse(finalResultJson);
+            var root = doc.RootElement;
+            var key = type switch
+            {
+                CampaignType.RestaurantOrder   => "orderId",
+                CampaignType.CabBooking        => "bookingId",
+                CampaignType.CourierService    => "orderId",
+                CampaignType.DoctorAppointment => "appointmentId",
+                _ => null
+            };
+            if (key is not null && root.TryGetProperty(key, out var el) && Guid.TryParse(el.GetString(), out var guid))
+                return $" (ref: {guid.ToString("N")[..8].ToUpper()})";
+        }
+        catch { }
+        return "";
     }
 
     // ── Opt-out / objection intercept ─────────────────────────────────────────
@@ -1450,6 +1793,15 @@ public class ConversationOrchestratorService(
         if (string.IsNullOrWhiteSpace(json)) return new QuestionnaireDefinition();
         try { return JsonSerializer.Deserialize<QuestionnaireDefinition>(json, JsonOpts) ?? new QuestionnaireDefinition(); }
         catch { return new QuestionnaireDefinition(); }
+    }
+
+    // Returns the sub-questionnaire for the active intent, or the root questionnaire for single-intent campaigns.
+    private static QuestionnaireDefinition GetEffectiveQuestionnaire(CampaignConfiguration? config, string? detectedIntent)
+    {
+        var root = TryParseQuestionnaire(config?.QuestionnaireJson);
+        if (string.IsNullOrWhiteSpace(detectedIntent) || !root.IsMultiIntent) return root;
+        var intent = root.Intents.FirstOrDefault(i => i.Id == detectedIntent);
+        return intent?.Questionnaire ?? root;
     }
 
     private static Dictionary<string, string> ParseSlots(string? json)
@@ -1581,6 +1933,14 @@ public class ConversationOrchestratorService(
         CallSession session, Campaign campaign, CampaignConfiguration? config,
         Dictionary<string, string> slots, CancellationToken ct)
     {
+        // Non-primary collect intents go to a generic complaint/incident handler,
+        // not to the primary booking entity (which would produce garbage records).
+        if (session.DetectedIntent is "complaint" or "delivery_complaint" or "lost_item")
+        {
+            await SaveComplaintOrIncidentAsync(session, slots, ct);
+            return;
+        }
+
         switch (campaign.CampaignType)
         {
             case CampaignType.CourierService:
@@ -1596,6 +1956,44 @@ public class ConversationOrchestratorService(
                 await SaveRestaurantOrderAsync(session, config, slots, ct);
                 break;
         }
+    }
+
+    private Task SaveComplaintOrIncidentAsync(CallSession session, Dictionary<string, string> slots, CancellationToken ct)
+    {
+        var eventType = session.DetectedIntent switch
+        {
+            "complaint"          => "restaurant_complaint",
+            "delivery_complaint" => "delivery_complaint",
+            "lost_item"          => "lost_item_report",
+            _                    => "complaint"
+        };
+
+        var cleanSlots = slots
+            .Where(kv => !kv.Key.StartsWith("__"))
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        db.CallEvents.Add(new CallEvent
+        {
+            Id            = Guid.NewGuid(),
+            CallSessionId = session.Id,
+            EventType     = eventType,
+            EventDataJson = JsonSerializer.Serialize(new
+            {
+                intentId = session.DetectedIntent,
+                slots    = cleanSlots,
+                status   = "Captured"
+            })
+        });
+
+        session.FinalResultJson = JsonSerializer.Serialize(new
+        {
+            type     = eventType,
+            intentId = session.DetectedIntent,
+            slots    = cleanSlots,
+            status   = "Captured"
+        });
+
+        return Task.CompletedTask;
     }
 
     private async Task SaveCourierEntitiesAsync(CallSession session, Dictionary<string, string> slots, CancellationToken ct)
@@ -1794,10 +2192,24 @@ public class ConversationOrchestratorService(
 
     private sealed class QuestionnaireDefinition
     {
-        [JsonPropertyName("openingScript")]   public string? OpeningScript { get; set; }
+        [JsonPropertyName("openingScript")]   public string? OpeningScript   { get; set; }
         [JsonPropertyName("startQuestionId")] public string? StartQuestionId { get; set; }
-        [JsonPropertyName("closingScript")]   public string? ClosingScript { get; set; }
+        [JsonPropertyName("closingScript")]   public string? ClosingScript   { get; set; }
         [JsonPropertyName("questions")]       public List<QuestionDefinition> Questions { get; set; } = [];
+        [JsonPropertyName("intents")]         public List<IntentDefinition> Intents     { get; set; } = [];
+        public bool IsMultiIntent => Intents.Count > 0;
+    }
+
+    private sealed class IntentDefinition
+    {
+        [JsonPropertyName("id")]                 public string Id                  { get; set; } = "";
+        [JsonPropertyName("name")]               public string Name                { get; set; } = "";
+        [JsonPropertyName("type")]               public string Type                { get; set; } = "collect";
+        [JsonPropertyName("triggers")]           public List<string> Triggers      { get; set; } = [];
+        [JsonPropertyName("questionnaire")]      public QuestionnaireDefinition? Questionnaire { get; set; }
+        [JsonPropertyName("transferNumber")]     public string? TransferNumber     { get; set; }
+        [JsonPropertyName("transferMessage")]    public string? TransferMessage    { get; set; }
+        [JsonPropertyName("continueToIntentId")] public string? ContinueToIntentId { get; set; }
     }
 
     private sealed class QuestionDefinition

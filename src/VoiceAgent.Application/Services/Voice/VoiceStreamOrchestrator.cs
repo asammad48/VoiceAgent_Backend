@@ -22,8 +22,10 @@ public class VoiceStreamOrchestrator(
 {
     // ── Per-session state ─────────────────────────────────────────────────────
 
-    private static readonly ConcurrentDictionary<Guid, bool> BotSpeaking = new();
+    private static readonly ConcurrentDictionary<Guid, bool>          BotSpeaking        = new();
     private static readonly ConcurrentDictionary<Guid, AudioAccumulator> AudioAccumulators = new();
+    private static readonly ConcurrentDictionary<Guid, DateTime>       BotFinishedAt      = new();
+    private static readonly ConcurrentDictionary<Guid, int>            SilenceReprompts   = new();
 
     // RMS threshold (out of 32767) separating speech from silence.
     // Lower = more sensitive (catches quiet mics). Raise if background noise triggers false detections.
@@ -31,7 +33,8 @@ public class VoiceStreamOrchestrator(
 
     // Minimum average RMS of accumulated PCM to even bother calling Deepgram.
     // If the whole buffer is below this, it's empty/silent — skip the API call.
-    private const double MinAccumulatedRmsThreshold = 150.0;
+    // Set to 300 to filter out faint TTS echoes that slip through the playback mute window.
+    private const double MinAccumulatedRmsThreshold = 300.0;
 
     // Silence required AFTER speech ends before we fire the Deepgram call.
     // Short utterances (< 1.5s of speech) use the faster threshold.
@@ -40,6 +43,10 @@ public class VoiceStreamOrchestrator(
 
     // Cap trailing silence added to the PCM buffer (keeps audio sent to Deepgram clean).
     private const int MaxTrailingSilenceChunks = 3;   // ~0.75s
+
+    // Watchdog: re-prompt after this many seconds of silence post-bot-speech.
+    private const double WatchdogTimeoutSeconds = 8.0;
+    private const int    MaxSilenceReprompts    = 2;    // hang up after N re-prompts with no response
 
     // WAV header is always 44 bytes; PCM samples follow as little-endian Int16.
     private const int WavHeaderBytes = 44;
@@ -108,10 +115,14 @@ public class VoiceStreamOrchestrator(
                     continue;
                 }
 
-                // Discard audio arriving while the bot is speaking (mic-echo suppression)
-                if (BotSpeaking.TryGetValue(callSessionId, out var botIsOn) && botIsOn)
+                // Discard audio while the bot is speaking OR while the client is still playing
+                // back the last TTS chunk (BotFinishedAt is set to the estimated playback-end
+                // time so echoes from the speaker can't bleed into the VAD).
+                var isBotActive = (BotSpeaking.TryGetValue(callSessionId, out var botIsOn) && botIsOn)
+                    || (BotFinishedAt.TryGetValue(callSessionId, out var playbackEnd) && playbackEnd > DateTime.UtcNow);
+                if (isBotActive)
                 {
-                    logger.LogDebug("[WS:{StreamType}] Session={Id} Discarding {Bytes} bytes (bot speaking)", streamType, callSessionId, payload.Length);
+                    logger.LogDebug("[WS:{StreamType}] Session={Id} Discarding {Bytes} bytes (bot active/playback)", streamType, callSessionId, payload.Length);
                     continue;
                 }
 
@@ -129,14 +140,40 @@ public class VoiceStreamOrchestrator(
                     // Accumulate raw PCM (strip the 44-byte WAV header)
                     if (payload.Length > WavHeaderBytes)
                         acc.PcmBuffer.AddRange(payload.AsSpan(WavHeaderBytes).ToArray());
-                    acc.LastSpeechAt        = DateTime.UtcNow;
-                    acc.HasSpeech           = true;
+                    acc.LastSpeechAt         = DateTime.UtcNow;
+                    acc.HasSpeech            = true;
                     acc.TrailingSilenceCount = 0;   // reset on resumed speech
+                    SilenceReprompts.TryRemove(callSessionId, out _);   // user responded — reset watchdog count
                     continue;
                 }
 
-                // Silent chunk — if no speech accumulated yet, nothing to do
-                if (!acc.HasSpeech) continue;
+                // Silent chunk — if no speech accumulated yet, check the watchdog timer
+                if (!acc.HasSpeech)
+                {
+                    if (BotFinishedAt.TryGetValue(callSessionId, out var botEnd) &&
+                        (DateTime.UtcNow - botEnd).TotalSeconds >= WatchdogTimeoutSeconds)
+                    {
+                        // Reset the timer so we don't fire again immediately
+                        BotFinishedAt[callSessionId] = DateTime.UtcNow;
+                        var repromptCount = SilenceReprompts.AddOrUpdate(callSessionId, 1, (_, v) => v + 1);
+
+                        if (repromptCount > MaxSilenceReprompts)
+                        {
+                            logger.LogInformation("[WS:{StreamType}] Session={Id} No response after {N} re-prompt(s) — ending call",
+                                streamType, callSessionId, MaxSilenceReprompts);
+                            await SendBotTurnAsync(socket, callSessionId,
+                                "I haven't heard from you for a while, so I'll let you go. Feel free to call us back anytime!",
+                                streamType, ct, isClosing: true);
+                            await SendCallEndedFrameAsync(socket, "silence_timeout", ct);
+                            break;
+                        }
+
+                        logger.LogInformation("[WS:{StreamType}] Session={Id} Watchdog silence — re-prompting (attempt {N}/{Max})",
+                            streamType, callSessionId, repromptCount, MaxSilenceReprompts);
+                        await TrySendRepromptAsync(socket, callSessionId, streamType, ct, "Are you still there? ");
+                    }
+                    continue;
+                }
 
                 // Add trailing silence up to the cap (so Deepgram hears a clean end-of-word)
                 if (acc.TrailingSilenceCount < MaxTrailingSilenceChunks)
@@ -183,12 +220,18 @@ public class VoiceStreamOrchestrator(
 
                 if (string.IsNullOrWhiteSpace(transcript))
                 {
-                    logger.LogInformation("[WS:{StreamType}] Session={Id} Empty transcript after {Dur:0.1}s — discarding",
+                    logger.LogInformation("[WS:{StreamType}] Session={Id} Empty transcript after {Dur:0.1}s — re-prompting",
                         streamType, callSessionId, durationSec);
+                    await TrySendRepromptAsync(socket, callSessionId, streamType, ct);
                     continue;
                 }
 
-                var botTurn = await orchestrator.ProcessMessageAsync(callSessionId, transcript, ct);
+                var botTurn = await orchestrator.ProcessMessageAsync(callSessionId, transcript,
+                    onInterimMessage: async (msg, innerCt) =>
+                    {
+                        logger.LogInformation("[WS:{StreamType}] Session={Id} Interim: \"{Msg}\"", streamType, callSessionId, msg);
+                        await SendBotTurnAsync(socket, callSessionId, msg, streamType, innerCt);
+                    }, ct);
                 logger.LogInformation("[WS:{StreamType}] Session={Id} Bot reply: \"{Reply}\" ShouldEndCall={End}", streamType, callSessionId, botTurn.Reply, botTurn.ShouldEndCall);
                 await costTrackingService.TrackLlmTokensAsync(
                     callSessionId,
@@ -222,6 +265,8 @@ public class VoiceStreamOrchestrator(
         {
             BotSpeaking.TryRemove(callSessionId, out _);
             AudioAccumulators.TryRemove(callSessionId, out _);
+            BotFinishedAt.TryRemove(callSessionId, out _);
+            SilenceReprompts.TryRemove(callSessionId, out _);
 
             if (socket.State == WebSocketState.Open)
             {
@@ -301,6 +346,37 @@ public class VoiceStreamOrchestrator(
         }
     }
 
+    // ── Re-prompt on empty STT result ─────────────────────────────────────────
+
+    private async Task TrySendRepromptAsync(WebSocket socket, Guid callSessionId, string streamType, CancellationToken ct,
+        string prefix = "Sorry, I didn't catch that. ")
+    {
+        try
+        {
+            var session = await db.CallSessions.FirstOrDefaultAsync(s => s.Id == callSessionId, ct);
+            if (session is null) return;
+
+            // Only re-prompt during active collection states
+            if (session.CurrentState is ConversationState.Completed or ConversationState.Declined
+                or ConversationState.Disqualified or ConversationState.AbuseEnded) return;
+
+            var lastBotTurn = await db.CallTurns
+                .Where(t => t.CallSessionId == callSessionId && t.Speaker == "bot")
+                .OrderByDescending(t => t.TurnNumber)
+                .FirstOrDefaultAsync(ct);
+
+            if (lastBotTurn is null) return;
+
+            logger.LogInformation("[WS:{StreamType}] Session={Id} Re-prompt (prefix='{Prefix}'): \"{Text}\"",
+                streamType, callSessionId, prefix.Trim(), lastBotTurn.Text);
+            await SendBotTurnAsync(socket, callSessionId, $"{prefix}{lastBotTurn.Text}", streamType, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[WS:{StreamType}] Session={Id} Re-prompt failed", streamType, callSessionId);
+        }
+    }
+
     // ── call_ended frame ──────────────────────────────────────────────────────
 
     private static async Task SendCallEndedFrameAsync(WebSocket socket, string? reason, CancellationToken ct)
@@ -366,6 +442,10 @@ public class VoiceStreamOrchestrator(
         finally
         {
             BotSpeaking[callSessionId] = false;
+            // Defer the watchdog start and the mute-window expiry to when the client
+            // is estimated to finish playing the audio (MP3 @ 128 kbps ≈ bytes / 16 ms).
+            var rawPlaybackMs = audioBytes > 100 ? audioBytes / 16 : 3_000;
+            BotFinishedAt[callSessionId] = DateTime.UtcNow.AddMilliseconds(rawPlaybackMs);
             await SendControlFrameAsync(socket, "bot_ended", isClosing, ct);
         }
 

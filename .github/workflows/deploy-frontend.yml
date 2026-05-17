@@ -1,0 +1,55 @@
+name: Deploy Frontend
+
+# Place this file in YOUR FRONTEND REPO at .github/workflows/deploy-frontend.yml
+# The VPS_HOST, VPS_USER, VPS_SSH_KEY, VPS_PORT secrets are shared with the backend repo.
+
+on:
+  push:
+    branches: [main]
+
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          # API calls go through Nginx at /api — no separate host needed
+          VITE_API_BASE_URL: /api
+          # Add any other build-time env vars your frontend needs here
+
+      - name: Copy dist to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          source: './dist/*'
+          target: '/var/www/voiceagent/frontend'
+          strip_components: 1
+
+      - name: Reload Nginx
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            sudo nginx -t && sudo systemctl reload nginx

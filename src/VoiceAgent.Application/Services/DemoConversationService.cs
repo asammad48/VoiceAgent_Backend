@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using VoiceAgent.Application.Abstractions;
 using VoiceAgent.Application.Dtos.Campaigns;
@@ -39,6 +40,9 @@ public class DemoConversationService(IAppDbContext db, IConversationOrchestrator
             x.IsActive &&
             x.IsDemoEnabled, ct) ?? throw new InvalidOperationException("Demo campaign not found or disabled.");
 
+        var config = await db.CampaignConfigurations
+            .FirstOrDefaultAsync(x => x.CampaignId == campaign.Id && x.TenantId == campaign.TenantId && x.IsActive, ct);
+
         var channel = Enum.TryParse<CallChannel>(request.Channel, true, out var parsed) ? parsed : CallChannel.WebText;
         var now = DateTime.UtcNow;
         var session = new CallSession
@@ -57,10 +61,12 @@ public class DemoConversationService(IAppDbContext db, IConversationOrchestrator
             HandoffAllowed = true
         };
 
-        var greeting = campaign.CampaignType switch
+        var greeting = ReadOpeningScript(config?.QuestionnaireJson) ?? campaign.CampaignType switch
         {
-            CampaignType.RestaurantOrder => "Hi! I can help with menu items, deals, or your order.",
-            CampaignType.CourierService => "Hi! Share pickup, dropoff, and package weight to get a quote.",
+            CampaignType.RestaurantOrder => "Hi! Welcome. How can I help you today?",
+            CampaignType.CourierService  => "Hi! How can I help you today?",
+            CampaignType.CabBooking      => "Hi! How can I help you today?",
+            CampaignType.DoctorAppointment => "Hi! How can I help you today?",
             _ => "Hi! How can I help you today?"
         };
 
@@ -87,7 +93,7 @@ public class DemoConversationService(IAppDbContext db, IConversationOrchestrator
     }
 
     public Task<SendDemoMessageResponseDto> SendAsync(SendDemoMessageRequestDto request, CancellationToken ct = default)
-        => orchestrator.ProcessMessageAsync(request.CallSessionId, request.Message, ct);
+        => orchestrator.ProcessMessageAsync(request.CallSessionId, request.Message, ct: ct);
 
 
     public async Task<CallSessionResponseDto?> GetSessionAsync(Guid callSessionId, CancellationToken ct = default)
@@ -124,5 +130,18 @@ public class DemoConversationService(IAppDbContext db, IConversationOrchestrator
         session.CurrentState = ConversationState.Completed;
         await db.SaveChangesAsync(ct);
         return true;
+    }
+
+    private static string? ReadOpeningScript(string? questionnaireJson)
+    {
+        if (string.IsNullOrWhiteSpace(questionnaireJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(questionnaireJson);
+            if (doc.RootElement.TryGetProperty("openingScript", out var el))
+                return el.GetString();
+        }
+        catch { }
+        return null;
     }
 }

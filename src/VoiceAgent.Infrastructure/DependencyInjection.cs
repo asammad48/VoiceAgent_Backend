@@ -16,6 +16,7 @@ using VoiceAgent.Infrastructure.Providers.Speech;
 using VoiceAgent.Infrastructure.Providers.Storage;
 using VoiceAgent.Infrastructure.Providers.Telephony;
 using VoiceAgent.Infrastructure.Providers.Voice;
+using VoiceAgent.Infrastructure.Providers.IntentDetection;
 using VoiceAgent.Infrastructure.Tools.Courier;
 using VoiceAgent.Infrastructure.Tools.Restaurant;
 
@@ -84,15 +85,20 @@ public static class DependencyInjection
 
         if (useMockProviders)
         {
+            services.AddScoped<ILookupService, MockLookupService>();
             services.AddScoped<ISlotExtractionService, MockSlotExtractionService>();
             services.AddScoped<IAnswerFinalizationService, MockAnswerFinalizationService>();
             services.AddScoped<ILocationNormalizationService, MockLocationNormalizationService>();
+            services.AddScoped<IIntentDetectionService, MockIntentDetectionService>();
         }
         else
         {
+            services.AddHttpClient("ExternalLookup").AddHttpMessageHandler<HttpRetryHandler>();
+            services.AddScoped<ILookupService, ProductionLookupService>();
             services.AddScoped<ISlotExtractionService, GeminiSlotExtractionService>();
             services.AddScoped<IAnswerFinalizationService, GeminiAnswerFinalizationService>();
             services.AddScoped<ILocationNormalizationService, GeminiLocationNormalizationService>();
+            services.AddScoped<IIntentDetectionService, GeminiIntentDetectionService>();
         }
 
         services.AddScoped<DbSeeder>();

@@ -3,4 +3,5 @@ using VoiceAgent.Domain.Enums; namespace VoiceAgent.Domain.Entities; public clas
     public string? EndReason { get; set; }
     public string? CurrentQuestionId { get; set; }
     public string? EditingSlotId { get; set; }
+    public string? DetectedIntent { get; set; }
 }
