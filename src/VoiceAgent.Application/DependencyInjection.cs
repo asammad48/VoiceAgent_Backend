@@ -12,6 +12,12 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
+        // TtsLocale is bound from appsettings in Program.cs before AddApplication() is called.
+        // ITtsNormalizationService is registered in AddInfrastructure (Gemini or pass-through).
+        // TtsPreparationPipeline is scoped to match the lifetime of ITtsNormalizationService.
+        services.AddOptions<TtsLocale>();
+        services.AddScoped<TtsPreparationPipeline>();
+
         services.AddAutoMapper(typeof(DependencyInjection).Assembly);
         services.AddScoped<IDemoConversationService, DemoConversationService>();
         services.AddScoped<IAuthService, AuthService>();

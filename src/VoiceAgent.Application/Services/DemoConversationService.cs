@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using VoiceAgent.Application.Abstractions;
 using VoiceAgent.Application.Dtos.Campaigns;
 using VoiceAgent.Application.Dtos.Calls;
@@ -10,7 +11,10 @@ using VoiceAgent.Domain.Enums;
 
 namespace VoiceAgent.Application.Services;
 
-public class DemoConversationService(IAppDbContext db, IConversationOrchestratorService orchestrator) : IDemoConversationService
+public class DemoConversationService(
+    IAppDbContext db,
+    IConversationOrchestratorService orchestrator,
+    ILogger<DemoConversationService> logger) : IDemoConversationService
 {
     public async Task<IReadOnlyList<CampaignResponseDto>> GetDemoCampaignsAsync(CancellationToken ct = default)
     {
@@ -84,6 +88,9 @@ public class DemoConversationService(IAppDbContext db, IConversationOrchestrator
 
         await db.SaveChangesAsync(ct);
 
+        logger.LogInformation("[Demo] StartAsync: Created SessionId={Id} CampaignId={CampaignId} Greeting='{Greeting}'",
+            session.Id, request.CampaignId, greeting);
+
         return new StartDemoConversationResponseDto
         {
             CallSessionId = session.Id,
@@ -92,8 +99,19 @@ public class DemoConversationService(IAppDbContext db, IConversationOrchestrator
         };
     }
 
-    public Task<SendDemoMessageResponseDto> SendAsync(SendDemoMessageRequestDto request, CancellationToken ct = default)
-        => orchestrator.ProcessMessageAsync(request.CallSessionId, request.Message, ct: ct);
+    public async Task<SendDemoMessageResponseDto> SendAsync(SendDemoMessageRequestDto request, CancellationToken ct = default)
+    {
+        logger.LogInformation("[Demo] SendAsync: SessionId={Id} Message='{Msg}'", request.CallSessionId, request.Message);
+        try
+        {
+            return await orchestrator.ProcessMessageAsync(request.CallSessionId, request.Message, ct: ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Demo] SendAsync failed: SessionId={Id}", request.CallSessionId);
+            throw;
+        }
+    }
 
 
     public async Task<CallSessionResponseDto?> GetSessionAsync(Guid callSessionId, CancellationToken ct = default)

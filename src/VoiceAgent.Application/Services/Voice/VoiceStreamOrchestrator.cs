@@ -18,6 +18,7 @@ public class VoiceStreamOrchestrator(
     IAudioStreamRouter audioRouter,
     IConversationOrchestratorService orchestrator,
     ICallCostTrackingService costTrackingService,
+    TtsPreparationPipeline ttsPipeline,
     ILogger<VoiceStreamOrchestrator> logger) : IVoiceStreamOrchestrator
 {
     // ── Per-session state ─────────────────────────────────────────────────────
@@ -430,9 +431,10 @@ public class VoiceStreamOrchestrator(
         {
             await SendControlFrameAsync(socket, "bot_started", isClosing, ct);
 
-            logger.LogInformation("[WS:{StreamType}] Session={Id} Synthesising TTS ({Chars} chars, isClosing={IsClosing})", streamType, callSessionId, text.Length, isClosing);
-            var audio = await audioRouter.SynthesizeAsync(text, ct);
-            await costTrackingService.TrackTtsCharsAsync(callSessionId, text.Length, ct);
+            var speakText = await ttsPipeline.PrepareAsync(text, ct);
+            logger.LogInformation("[WS:{StreamType}] Session={Id} Synthesising TTS ({Chars} chars → {Spoken} spoken, isClosing={IsClosing})", streamType, callSessionId, text.Length, speakText.Length, isClosing);
+            var audio = await audioRouter.SynthesizeAsync(speakText, ct);
+            await costTrackingService.TrackTtsCharsAsync(callSessionId, speakText.Length, ct);
 
             audioBytes = audio.Length;
             logger.LogInformation("[WS:{StreamType}] Session={Id} Sending TTS audio ({Bytes} bytes)", streamType, callSessionId, audioBytes);

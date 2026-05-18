@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Infrastructure.Providers.Llm;
@@ -6,7 +7,8 @@ namespace VoiceAgent.Infrastructure.Providers;
 
 public sealed class GeminiAnswerFinalizationService(
     GeminiClient geminiClient,
-    IOptions<GeminiOptions> options) : IAnswerFinalizationService
+    IOptions<GeminiOptions> options,
+    ILogger<GeminiAnswerFinalizationService> logger) : IAnswerFinalizationService
 {
     public async Task<AnswerFinalizationResult> FinalizeAnswersAsync(
         IReadOnlyList<SlotAnswer> answers,
@@ -14,6 +16,9 @@ public sealed class GeminiAnswerFinalizationService(
     {
         if (options.Value.UseMockProviders)
             return new AnswerFinalizationResult(true, []);
+
+        logger.LogInformation("[Finalization] Running on {Count} slots: {Slots}",
+            answers.Count, string.Join(", ", answers.Select(a => $"{a.SlotId}='{a.Answer}'")));
 
         var qaPairs = string.Join("\n", answers.Select(a =>
             $"  slotId={a.SlotId} type={a.SlotType ?? "text"}: Q=\"{a.Question}\" A=\"{a.Answer}\""));
@@ -44,13 +49,19 @@ public sealed class GeminiAnswerFinalizationService(
         if (string.IsNullOrWhiteSpace(trimmed)
             || trimmed.Equals("ALL_CLEAR", StringComparison.OrdinalIgnoreCase)
             || trimmed.Equals("[mock-gemini]", StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogInformation("[Finalization] Result: ALL_CLEAR");
             return new AnswerFinalizationResult(true, []);
+        }
 
         var knownSlotIds = new HashSet<string>(answers.Select(a => a.SlotId), StringComparer.OrdinalIgnoreCase);
         var ambiguous = trimmed
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(s => knownSlotIds.Contains(s))
             .ToList();
+
+        logger.LogInformation("[Finalization] Result: rawResponse='{Raw}' ambiguous=[{Ambiguous}]",
+            trimmed, string.Join(",", ambiguous));
 
         return ambiguous.Count > 0
             ? new AnswerFinalizationResult(false, ambiguous)

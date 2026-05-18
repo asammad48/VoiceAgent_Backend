@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using VoiceAgent.Application.Abstractions;
 using VoiceAgent.Application.Dtos.Demo;
 using VoiceAgent.Application.Interfaces;
@@ -21,7 +22,8 @@ public class ConversationOrchestratorService(
     IAnswerFinalizationService finalizationService,
     ILocationNormalizationService locationNormalization,
     IIntentDetectionService intentDetectionService,
-    ILookupService lookupService) : IConversationOrchestratorService
+    ILookupService lookupService,
+    ILogger<ConversationOrchestratorService> logger) : IConversationOrchestratorService
 {
     // ── Entry points ──────────────────────────────────────────────────────────
 
@@ -30,6 +32,10 @@ public class ConversationOrchestratorService(
         Func<string, CancellationToken, Task>? onInterimMessage = null,
         CancellationToken ct = default)
     {
+        logger.LogInformation("[Orchestrator] Session={Id} ProcessMessage: '{Msg}'", callSessionId, message);
+        try
+        {
+
         var session = await db.CallSessions.FirstOrDefaultAsync(x => x.Id == callSessionId, ct)
             ?? throw new InvalidOperationException("Call session not found.");
         var client = await db.Clients.FirstOrDefaultAsync(x => x.Id == session.ClientId && x.TenantId == session.TenantId, ct)
@@ -92,8 +98,14 @@ public class ConversationOrchestratorService(
         if (session.CurrentState == ConversationState.AwaitingConfirmation)
         {
             var (confirmReply, shouldEnd, endReason) = await HandleConfirmationAsync(session, lower, campaign, config, ct);
+            logger.LogInformation("[Orchestrator] Session={Id} Confirmation handled: ShouldEnd={End} EndReason={Reason} Reply={Reply}",
+                callSessionId, shouldEnd, endReason, confirmReply);
             db.CallTurns.Add(new CallTurn { Id = Guid.NewGuid(), CallSessionId = session.Id, TurnNumber = turnNumber + 1, Speaker = "bot", Text = confirmReply, StateAfter = session.CurrentState.ToString() });
-            await db.SaveChangesAsync(ct);
+            try { await db.SaveChangesAsync(ct); }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "[Orchestrator] Session={Id} DB save failed after confirmation — closing sentence will still be sent", callSessionId);
+            }
             return new SendDemoMessageResponseDto { Reply = confirmReply, CurrentState = session.CurrentState.ToString(), ShouldEndCall = shouldEnd, EndReason = endReason, MissingSlots = [] };
         }
 
@@ -149,6 +161,13 @@ public class ConversationOrchestratorService(
             MissingSlots = result.MissingSlots, FinalResult = result.FinalResult,
             ShouldEndCall = result.ShouldEndCall, EndReason = result.EndReason
         };
+
+        } // end try
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[Orchestrator] Session={Id} Unhandled exception in ProcessMessageAsync", callSessionId);
+            throw;
+        }
     }
 
     public Task<string> OrchestrateAsync(Guid callSessionId, string message, CancellationToken ct = default)
@@ -460,6 +479,8 @@ public class ConversationOrchestratorService(
             .ToList();
 
         var match = await intentDetectionService.DetectAsync(message, triggers, ct);
+        logger.LogInformation("[Orchestrator] Session={Id} Intent detection: message='{Msg}' matched={Intent}",
+            session.Id, message, match?.IntentId ?? "null");
 
         if (match is null)
         {
@@ -481,6 +502,7 @@ public class ConversationOrchestratorService(
 
         var intent = rootQuestionnaire.Intents.First(i => i.Id == match.IntentId);
         session.DetectedIntent = intent.Id;
+        logger.LogInformation("[Orchestrator] Session={Id} Intent set: id={IntentId} type={Type}", session.Id, intent.Id, intent.Type);
 
         // Transfer intents → immediate handoff
         if (intent.Type == "transfer")
@@ -713,8 +735,14 @@ public class ConversationOrchestratorService(
 
         // Extract: regex first (with type hint), then LLM fallback (with same type hint)
         var extracted = TryExtractValue(slotKey, message, lower, current.ValidValues, current.SlotType);
+        logger.LogInformation("[Orchestrator] Session={Id} SlotExtract slot={Slot} regex={RegexResult}",
+            session.Id, slotKey, extracted ?? "null");
         if (extracted is null)
+        {
             extracted = await slotExtractionService.ExtractAsync(slotKey, current.Question, message, current.SlotType, ct);
+            logger.LogInformation("[Orchestrator] Session={Id} SlotExtract slot={Slot} llm={LlmResult}",
+                session.Id, slotKey, extracted ?? "null");
+        }
 
         if (extracted is null)
         {
@@ -886,6 +914,13 @@ public class ConversationOrchestratorService(
                     await onInterimMessage("Please bear with me while I compile your information.", ct);
 
                 var finalization = await finalizationService.FinalizeAnswersAsync(answers, ct);
+                logger.LogInformation("[Orchestrator] Session={Id} Finalization: allClear={AllClear} ambiguous={Ambiguous}",
+                    session.Id, finalization.AllClear, string.Join(",", finalization.AmbiguousSlotIds));
+
+                // Always mark finalized now so we never re-run finalization on subsequent turns
+                slots["__finalized__"] = "true";
+                session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+
                 if (!finalization.AllClear && finalization.AmbiguousSlotIds.Count > 0)
                 {
                     var ambiguousSlotId = finalization.AmbiguousSlotIds[0];
@@ -902,9 +937,11 @@ public class ConversationOrchestratorService(
                     }
                 }
             }
-
-            slots["__finalized__"] = "true";
-            session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+            else
+            {
+                slots["__finalized__"] = "true";
+                session.CollectedSlotsJson = JsonSerializer.Serialize(slots);
+            }
         }
 
         session.CurrentState = ConversationState.AwaitingConfirmation;
@@ -916,6 +953,7 @@ public class ConversationOrchestratorService(
             if (onInterimMessage is not null)
                 await onInterimMessage("Please bear with me while I calculate your quote.", ct);
             var courierReply = await BuildCourierQuoteSummaryAsync(session, slots, ct);
+            logger.LogInformation("[Orchestrator] Session={Id} CourierQuote built: {Reply}", session.Id, courierReply);
             var courierResult = BuildFinalResult(campaign.CampaignType, slots, session);
             session.FinalResultJson = JsonSerializer.Serialize(courierResult);
             return (courierReply, [], courierResult, false, null);
@@ -927,6 +965,7 @@ public class ConversationOrchestratorService(
             if (onInterimMessage is not null)
                 await onInterimMessage("Please bear with me while I calculate your fare.", ct);
             var cabReply = await BuildCabQuoteSummaryAsync(session, config, slots, ct);
+            logger.LogInformation("[Orchestrator] Session={Id} CabQuote built: {Reply}", session.Id, cabReply);
             var cabResult = BuildFinalResult(campaign.CampaignType, slots, session);
             session.FinalResultJson = JsonSerializer.Serialize(cabResult);
             return (cabReply, [], cabResult, false, null);
@@ -1668,6 +1707,16 @@ public class ConversationOrchestratorService(
                 vehicleType = slots.GetValueOrDefault("vehicleType"),
                 estimatedFare = slots.TryGetValue("estimatedFare", out var ef) ? $"£{ef}" : "TBC",
                 distanceKm = slots.GetValueOrDefault("distanceKm", ""), currency = "GBP", status = "CapturedOnly"
+            },
+            CampaignType.CourierService => new
+            {
+                type = "courier_booking", customerName = slots.GetValueOrDefault("customerName"), phone = slots.GetValueOrDefault("phone"),
+                pickupAddress = slots.GetValueOrDefault("pickupAddress"), dropoffAddress = slots.GetValueOrDefault("dropoffAddress"),
+                weightKg = slots.GetValueOrDefault("weightKg"), packageType = slots.GetValueOrDefault("packageType"),
+                urgency = slots.GetValueOrDefault("urgency"),
+                estimatedFare = slots.TryGetValue("estimatedFare", out var cef) ? cef : "TBC",
+                currency = slots.GetValueOrDefault("estimatedCurrency", "GBP"),
+                distanceKm = slots.GetValueOrDefault("distanceKm", ""), orderId = (string?)null, status = "CapturedOnly"
             },
             _ => new { type = "lead", slots, status = "CapturedOnly" }
         };

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Infrastructure.Providers.Llm;
@@ -6,12 +7,14 @@ namespace VoiceAgent.Infrastructure.Providers;
 
 public sealed class GeminiSlotExtractionService(
     GeminiClient geminiClient,
-    IOptions<GeminiOptions> options) : ISlotExtractionService
+    IOptions<GeminiOptions> options,
+    ILogger<GeminiSlotExtractionService> logger) : ISlotExtractionService
 {
     public async Task<string?> ExtractAsync(string slotId, string question, string userMessage, string? slotType, CancellationToken ct = default)
     {
         // When mocking, behave as null so the regex path is the only path
         if (options.Value.UseMockProviders) return null;
+        logger.LogInformation("[SlotExtraction] LLM extract: slot={Slot} type={Type} userMsg='{Msg}'", slotId, slotType ?? "text", userMessage);
 
         var typeConstraint = slotType switch
         {
@@ -58,8 +61,12 @@ public sealed class GeminiSlotExtractionService(
         if (string.IsNullOrWhiteSpace(trimmed)
             || trimmed.Equals("null", StringComparison.OrdinalIgnoreCase)
             || trimmed.Equals("[mock-gemini]", StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogInformation("[SlotExtraction] slot={Slot} result=null (LLM returned no value)", slotId);
             return null;
+        }
 
+        logger.LogInformation("[SlotExtraction] slot={Slot} result='{Value}'", slotId, trimmed);
         return trimmed;
     }
 }

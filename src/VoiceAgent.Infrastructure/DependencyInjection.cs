@@ -5,6 +5,7 @@ using VoiceAgent.Application.Abstractions;
 using VoiceAgent.Application.Interfaces;
 using VoiceAgent.Application.Interfaces.Providers;
 using VoiceAgent.Application.Interfaces.Tools;
+using VoiceAgent.Application.Interfaces.Voice;
 using VoiceAgent.Infrastructure.Caching;
 using VoiceAgent.Infrastructure.Http;
 using VoiceAgent.Infrastructure.Persistence;
@@ -28,6 +29,7 @@ public static class DependencyInjection
     {
         services.AddMemoryCache();
         services.AddSingleton<InMemoryConversationStateStore>();
+        services.AddSingleton<TtsAudioCache>();
 
         services.AddDbContext<AppDbContext>(opt => opt.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
         services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
@@ -90,6 +92,7 @@ public static class DependencyInjection
             services.AddScoped<IAnswerFinalizationService, MockAnswerFinalizationService>();
             services.AddScoped<ILocationNormalizationService, MockLocationNormalizationService>();
             services.AddScoped<IIntentDetectionService, MockIntentDetectionService>();
+            services.AddScoped<ITtsNormalizationService, PassThroughTtsNormalizationService>();
         }
         else
         {
@@ -99,6 +102,7 @@ public static class DependencyInjection
             services.AddScoped<IAnswerFinalizationService, GeminiAnswerFinalizationService>();
             services.AddScoped<ILocationNormalizationService, GeminiLocationNormalizationService>();
             services.AddScoped<IIntentDetectionService, GeminiIntentDetectionService>();
+            services.AddScoped<ITtsNormalizationService, GeminiTtsNormalizationService>();
         }
 
         services.AddScoped<DbSeeder>();
